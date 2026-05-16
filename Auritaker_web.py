@@ -12,16 +12,17 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 MODEL = "openrouter/free"
 
+# 🟢 ADD THIS LINE HERE TO INITIALIZE YOUR USERS DICTIONARY
+USERS = {
+    "aryanzubin123@gmail.com": "AdMiN123!"  # Never get locked out of your account if the server restarts.
+} 
+
 # FIXED: Added parentheses so Python reads all your instructions!
 SYSTEM_ROLE = (
     "You are Auritaker AI. Keep your answers extremely short, concise, and punchy. Be helpful and direct. "
     "Do not yap. Use bullet points if listing things. Max 2-3 sentences per response unless strictly asked for code. "
     "If the user asks for news, current events, or anything that may require up-to-date information, use the web search tool."
 )
-
-# Active database dictionary for users
-USERS = {"aryanzubin123@gmail.com": "password123"}
-
 tavily = None
 if TAVILY_API_KEY:
     try:
