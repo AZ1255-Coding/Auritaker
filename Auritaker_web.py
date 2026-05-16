@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify, session, redirect
-import requests, os
+import requests, os, json
 from flask_cors import CORS
 from tavily import TavilyClient
 
@@ -11,18 +11,20 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 MODEL = "openrouter/free"
+SYSTEM_ROLE = "You are Auritaker, a high-intelligence AI built in April 2026. Be sharp, witty, and direct. Never greet the user unless they greet first. Skip self-introductions. Just answer and be helpful."
 
-# 🟢 ADD THIS LINE HERE TO INITIALIZE YOUR USERS DICTIONARY
-USERS = {
-    "aryanzubin123@gmail.com": "AdMiN123!"  # Never get locked out of your account if the server restarts.
-} 
+USERS_FILE = "users.json"
 
-# FIXED: Added parentheses so Python reads all your instructions!
-SYSTEM_ROLE = (
-    "You are Auritaker AI. Keep your answers extremely short, concise, and punchy. Be helpful and direct. "
-    "Do not yap. Use bullet points if listing things. Max 2-3 sentences per response unless strictly asked for code. "
-    "If the user asks for news, current events, or anything that may require up-to-date information, use the web search tool."
-)
+def load_users():
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE) as f:
+            return json.load(f)
+    return {"aryanzubin123@gmail.com": "password123"}
+
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f)
+
 tavily = None
 if TAVILY_API_KEY:
     try:
@@ -41,30 +43,26 @@ def login():
     if request.method == "POST":
         u = request.form["username"]
         p = request.form["password"]
-        if USERS.get(u) == p:
+        if load_users().get(u) == p:
             session["user"] = u
             session["memory"] = [{"role": "system", "content": SYSTEM_ROLE}]
             return redirect("/")
         return render_template("login.html", error="Invalid email or password")
     return render_template("login.html")
 
-# NEW: Sign-Up Endpoint for creating a new account
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if request.method == "POST":
         u = request.form["username"]
         p = request.form["password"]
-        
-        if not u or not p:
-            return render_template("signup.html", error="Fields cannot be empty")
-        
-        if u in USERS:
-            return render_template("signup.html", error="Username already exists")
-        
-        # Save new user into your USERS system
-        USERS[u] = p
-        return redirect("/login")
-        
+        users = load_users()
+        if u in users:
+            return render_template("signup.html", error="Email already registered")
+        users[u] = p
+        save_users(users)
+        session["user"] = u
+        session["memory"] = [{"role": "system", "content": SYSTEM_ROLE}]
+        return redirect("/")
     return render_template("signup.html")
 
 @app.route("/logout")
