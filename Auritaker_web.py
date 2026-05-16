@@ -1,73 +1,97 @@
-from flask import Flask, request, jsonify, session, render_template
+from flask import Flask, render_template, request, jsonify, session, redirect
 import requests, os
-from flask_cors import CORS 
+from dotenv import load_dotenv
+from flask_cors import CORS
 from tavily import TavilyClient
 
-app = Flask(__name__)
+load_dotenv()
 
-# 1. Direct CORS for your GitHub site
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "auritaker_secret")
 CORS(app, supports_credentials=True, origins=["https://az1255-coding.github.io"])
 
-# 2. Secret key for memory/sessions
-app.secret_key = os.environ.get("SECRET_KEY", "auritaker_default_999")
-
-# 3. Load Keys safely from Render (not local files)
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 MODEL = "openrouter/free"
-SYSTEM_ROLE = "You are Auritaker, a sharp AI built in 2026. Answer directly."
+SYSTEM_ROLE = "You are Auritaker, a high-intelligence AI built in April 2026. Be sharp, witty, and direct. Skip the self-introductions unless asked. Just answer and be helpful."
 
-# 4. Initialize Tavily safely (This stops the Status 1 crash!)
+USERS = {"aryanzubin123@gmail.com": "password123"}
+
 tavily = None
 if TAVILY_API_KEY:
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
     except:
-        print("Tavily failed to initialize.")
+        pass
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Auritaker API is Running!"
+    if "user" not in session:
+        return redirect("/login")
+    return render_template("index.html")
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        u = request.form["username"]
+        p = request.form["password"]
+        if USERS.get(u) == p:
+            session["user"] = u
+            session["memory"] = [{"role": "system", "content": SYSTEM_ROLE}]
+            return redirect("/")
+        return render_template("login.html", error="Invalid email or password")
+    return render_template("login.html")
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+def should_search(text):
+    keys = ["latest", "news", "today", "who is", "what is", "when did", "where is",
+            "update", "current", "recent", "now", "happened", "youtube", "yt",
+            "song", "by the", "twitter", "reddit", "tiktok", "price", "score"]
+    return any(k in text.lower() for k in keys)
+
+def web_search(q):
+    try:
+        res = tavily.search(query=q, max_results=2)
+        return "\n".join([r["content"] for r in res["results"]])[:800]
+    except:
+        return ""
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    if not OPENROUTER_API_KEY:
-        return jsonify({"response": "Error: OpenRouter Key missing."})
+    if "user" not in session:
+        return jsonify({"response": "Not logged in"})
 
     user_input = request.json.get("message", "")
 
-    # Handle Conversation Memory
-    if "memory" not in session:
-        session["memory"] = [{"role": "system", "content": SYSTEM_ROLE}]
-    
-    memory = session["memory"]
+    if tavily and should_search(user_input):
+        web = web_search(user_input)
+        if web:
+            user_input += f"\n\n[Real-time data]:\n{web}"
 
-    # Simple Search Logic
-    if tavily and "search" in user_input.lower():
-        try:
-            res = tavily.search(query=user_input, max_results=2)
-            context = "\n".join([r["content"] for r in res["results"]])
-            user_input = f"[Search Data]: {context}\n\nUser: {user_input}"
-        except:
-            pass
-
+    memory = session.get("memory", [{"role": "system", "content": SYSTEM_ROLE}])
     memory.append({"role": "user", "content": user_input})
 
-    # Call OpenRouter
     try:
-        response = requests.post(
+        api_response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            },
             json={"model": MODEL, "messages": memory[-10:]},
             timeout=25
         )
-        reply = response.json()['choices'][0]['message']['content']
+        reply = api_response.json()["choices"][0]["message"]["content"]
         memory.append({"role": "assistant", "content": reply})
         session["memory"] = memory
         return jsonify({"response": reply})
     except Exception as e:
-        return jsonify({"response": f"AI Error: {str(e)}"})
+        return jsonify({"response": f"Error: {str(e)}"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
