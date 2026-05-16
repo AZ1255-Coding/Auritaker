@@ -1,6 +1,6 @@
 flask
+flask-cors
 requests
-tavily-python
 python-dotenv
+tavily-python
 gunicorn
-waitress
