@@ -1,11 +1,7 @@
 from flask import Flask, render_template, request, jsonify, session, redirect
 import requests, os
-from dotenv import load_dotenv
 from flask_cors import CORS
 from tavily import TavilyClient
-import dotenv
-
-dotenv.load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "auritaker_secret")
