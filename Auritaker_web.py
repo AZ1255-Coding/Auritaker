@@ -11,8 +11,15 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 MODEL = "openrouter/free"
-SYSTEM_ROLE = "You are Auritaker, a high-intelligence AI built in April 2026. Be sharp, witty, and direct. Skip the self-introductions unless asked. Just answer and be helpful."
 
+# FIXED: Added parentheses so Python reads all your instructions!
+SYSTEM_ROLE = (
+    "You are Auritaker AI. Keep your answers extremely short, concise, and punchy. Be helpful and direct. "
+    "Do not yap. Use bullet points if listing things. Max 2-3 sentences per response unless strictly asked for code. "
+    "If the user asks for news, current events, or anything that may require up-to-date information, use the web search tool."
+)
+
+# Active database dictionary for users
 USERS = {"aryanzubin123@gmail.com": "password123"}
 
 tavily = None
@@ -39,6 +46,25 @@ def login():
             return redirect("/")
         return render_template("login.html", error="Invalid email or password")
     return render_template("login.html")
+
+# NEW: Sign-Up Endpoint for creating a new account
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    if request.method == "POST":
+        u = request.form["username"]
+        p = request.form["password"]
+        
+        if not u or not p:
+            return render_template("signup.html", error="Fields cannot be empty")
+        
+        if u in USERS:
+            return render_template("signup.html", error="Username already exists")
+        
+        # Save new user into your USERS system
+        USERS[u] = p
+        return redirect("/login")
+        
+    return render_template("signup.html")
 
 @app.route("/logout")
 def logout():
