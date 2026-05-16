@@ -1,7 +1,11 @@
 from flask import Flask, render_template, request, jsonify, session, redirect
-import requests, os, json
+import requests, os
+from dotenv import load_dotenv
 from flask_cors import CORS
 from tavily import TavilyClient
+import dotenv
+
+dotenv.load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "auritaker_secret")
@@ -11,19 +15,16 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 MODEL = "openrouter/free"
-SYSTEM_ROLE = "You are Auritaker, a high-intelligence AI built in April 2026. Be sharp, witty, and direct. Never greet the user unless they greet first. Skip self-introductions. Just answer and be helpful."
 
-USERS_FILE = "users.json"
+# FIXED: Formatted system role clearly
+SYSTEM_ROLE = (
+    "You are Auritaker AI. Keep your answers extremely short, concise, and punchy. Be helpful and direct. "
+    "Do not yap. Use bullet points if listing things. Max 2-3 sentences per response unless strictly asked for code. "
+    "If the user asks for news, current events, or anything that may require up-to-date information, use the web search tool."
+)
 
-def load_users():
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE) as f:
-            return json.load(f)
-    return {"aryanzubin123@gmail.com": "password123"}
-
-def save_users(users):
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f)
+# Tracks accounts in memory (resets on server restart/deployment)
+USERS = {"aryanzubin123@gmail.com": "password123"}
 
 tavily = None
 if TAVILY_API_KEY:
@@ -43,7 +44,7 @@ def login():
     if request.method == "POST":
         u = request.form["username"]
         p = request.form["password"]
-        if load_users().get(u) == p:
+        if USERS.get(u) == p:
             session["user"] = u
             session["memory"] = [{"role": "system", "content": SYSTEM_ROLE}]
             return redirect("/")
@@ -55,14 +56,16 @@ def signup():
     if request.method == "POST":
         u = request.form["username"]
         p = request.form["password"]
-        users = load_users()
-        if u in users:
-            return render_template("signup.html", error="Email already registered")
-        users[u] = p
-        save_users(users)
-        session["user"] = u
-        session["memory"] = [{"role": "system", "content": SYSTEM_ROLE}]
-        return redirect("/")
+        
+        if not u or not p:
+            return render_template("signup.html", error="Fields cannot be empty")
+        
+        if u in USERS:
+            return render_template("signup.html", error="Username already exists")
+        
+        USERS[u] = p
+        return redirect("/login")
+        
     return render_template("signup.html")
 
 @app.route("/logout")
@@ -114,6 +117,36 @@ def chat():
         return jsonify({"response": reply})
     except Exception as e:
         return jsonify({"response": f"Error: {str(e)}"})
+
+# NEW: Automatically generates a 2-4 word summary title based on the first prompt
+@app.route("/generate_title", methods=["POST"])
+def generate_title():
+    if "user" not in session:
+        return jsonify({"title": "New Chat"})
+        
+    user_input = request.json.get("message", "")
+    if not user_input:
+        return jsonify({"title": "New Chat"})
+
+    title_prompt = [
+        {"role": "system", "content": "You are a title generator. Convert the user's message into an extremely short, clean, descriptive title of 2 to 4 words. Do not use quotes, punctuation, or extra words. Just output the title."},
+        {"role": "user", "content": f"Message: {user_input}"}
+    ]
+
+    try:
+        api_response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={"model": MODEL, "messages": title_prompt},
+            timeout=15
+        )
+        title = api_response.json()["choices"][0]["message"]["content"].strip()
+        return jsonify({"title": title})
+    except Exception:
+        return jsonify({"title": "New Chat"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
