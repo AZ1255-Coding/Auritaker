@@ -1,0 +1,6 @@
+flask
+requests
+tavily-python
+python-dotenv
+gunicorn
+waitress
