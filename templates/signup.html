@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auritaker AI - Sign Up</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: #0d0e12;
+            color: #ffffff;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        /* Glowing Login Box Container */
+        .login-container {
+            background: rgba(20, 22, 30, 0.85);
+            padding: 40px;
+            border-radius: 16px;
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+            border: 2px solid #00ffcc;
+            box-shadow: 0 0 25px rgba(0, 255, 204, 0.2), inset 0 0 15px rgba(0, 255, 204, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        h2 {
+            font-size: 2rem;
+            margin-bottom: 25px;
+            letter-spacing: 2px;
+            color: #00ffcc;
+            text-shadow: 0 0 10px rgba(0, 255, 204, 0.5);
+        }
+
+        /* Input Fields */
+        .input-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        input {
+            width: 100%;
+            padding: 14px 20px;
+            background: #181b24;
+            border: 1px solid #2d3345;
+            border-radius: 8px;
+            color: #fff;
+            font-size: 1rem;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+
+        input:focus {
+            border-color: #00ffcc;
+            box-shadow: 0 0 12px rgba(0, 255, 204, 0.3);
+            background: #1c202b;
+        }
+
+        /* Neon Button */
+        .neon-btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #00ffcc, #00bfff);
+            border: none;
+            border-radius: 8px;
+            color: #0d0e12;
+            font-size: 1.1rem;
+            font-weight: bold;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(0, 255, 204, 0.4);
+        }
+
+        .neon-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 0 25px rgba(0, 255, 204, 0.7);
+        }
+
+        /* Error Box styling */
+        .error-message {
+            color: #ff0055;
+            text-shadow: 0 0 10px rgba(255, 0, 85, 0.4);
+            margin-bottom: 15px;
+            font-size: 0.95rem;
+        }
+
+        p {
+            margin-top: 25px;
+            color: #707993;
+            font-size: 0.95rem;
+        }
+
+        a {
+            color: #00ffcc;
+            text-decoration: none;
+            font-weight: bold;
+            transition: color 0.3s;
+        }
+
+        a:hover {
+            color: #00bfff;
+            text-shadow: 0 0 8px rgba(0, 191, 255, 0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="login-container">
+        <h2>CREATE ACCOUNT</h2>
+        
+        {% if error %}
+            <div class="error-message">{{ error }}</div>
+        {% endif %}
+
+        <form action="/signup" method="POST">
+            <div class="input-group">
+                <input type="email" name="username" placeholder="Enter Email" required>
+            </div>
+            <div class="input-group">
+                <input type="password" name="password" placeholder="Create Password" required>
+            </div>
+            <button type="submit" class="neon-btn">SIGN UP</button>
+        </form>
+
+        <p>Already have an account? <a href="/login">Log In</a></p>
+    </div>
+
+</body>
+</html>
