@@ -1,9 +1,13 @@
-from flask import Flask, render_template, request, jsonify, session, redirect
+from flask import Flask, render_template, request, jsonify, session, redirect, send_from_directory
 import requests, os
 from flask_cors import CORS
 from tavily import TavilyClient
 
 app = Flask(__name__)
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, 'static'),
+                               'favicon.ico', mimetype='image/vnd.microsoft.icon')
 app.secret_key = os.environ.get("SECRET_KEY", "auritaker_secret")
 CORS(app, supports_credentials=True, origins=["https://az1255-coding.github.io"])
 
