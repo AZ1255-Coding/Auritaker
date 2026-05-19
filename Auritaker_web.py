@@ -1,20 +1,16 @@
 from flask import Flask, render_template, request, jsonify, session, redirect
 import requests, os
-from dotenv import load_dotenv
 from flask_cors import CORS
 from tavily import TavilyClient
-import dotenv
-
-dotenv.load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "auritaker_secret")
 CORS(app, supports_credentials=True, origins=["https://az1255-coding.github.io"])
 
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
+MODEL_KEY = os.environ.get("MODEL_KEY")
 
-MODEL = "openrouter/free"
+MODEL = "auritaker-aura-1"  # This is the name of your model in Ollama. Change if you used a different name when importing.
 SYSTEM_ROLE = "You are Auritaker, a high-intelligence AI built in April 2026. Be sharp, witty, and direct. Skip the self-introductions unless asked. Just answer and be helpful."
 
 USERS = {"aryanzubin123@gmail.com": "password123"}
@@ -79,9 +75,9 @@ def chat():
 
     try:
         api_response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
+            "http://localhost:11434/api/chat",
             headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Authorization": f"Bearer {MODEL_KEY}",
                 "Content-Type": "application/json"
             },
             json={"model": MODEL, "messages": memory[-10:]},
