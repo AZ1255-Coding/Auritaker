@@ -1,0 +1,12 @@
+users.json
+*.db
+__pycache__/
+*.pyc
+.env
+*.exe
+*.nsis
+*nsis*
+.git/
+build/
+dist/
+*.spec
