@@ -107,15 +107,12 @@ def chat():
 
     try:
         r = requests.post(
-            f"{NGROK_URL}/api/generate",
-            headers={
-                "ngrok-skip-browser-warning": "true",
-                "User-Agent": "Mozilla/5.0",
-            },
-            json={"model": MODEL, "prompt": prompt, "stream": True},
-            timeout=60,
-            stream=True
-        )
+    f"{NGROK_URL}/api/generate",
+    headers={"User-Agent": "Mozilla/5.0"},
+    json={"model": MODEL, "prompt": prompt, "stream": True},
+    timeout=60,
+    stream=True
+)
         reply = ""
         for line in r.iter_lines():
             if line:
