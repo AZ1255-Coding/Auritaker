@@ -111,7 +111,6 @@ def chat():
             headers={
                 "ngrok-skip-browser-warning": "true",
                 "User-Agent": "Mozilla/5.0",
-                "Content-Type": "application/json"
             },
             json={"model": MODEL, "prompt": prompt, "stream": True},
             timeout=60,
