@@ -12,7 +12,7 @@ def favicon():
     return send_from_directory('static', 'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
-NGROK_URL = "https://parsnip-crevice-guiding.ngrok-free.dev"
+NGROK_URL = "https://tsunami-robots-match-rca.trycloudflare.com"
 
 MODEL = "auritaker-aura-1"
 SYSTEM_ROLE = "You are Auritaker, a high-intelligence AI built in April 2026. Be sharp, witty, and direct. Never greet the user unless they greet first. Skip self-introductions. Just answer and be helpful."
