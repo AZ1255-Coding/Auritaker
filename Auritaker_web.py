@@ -11,10 +11,12 @@ CORS(app, supports_credentials=True, origins=["https://az1255-coding.github.io"]
 def favicon():
     return send_from_directory('static', 'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+# Changed environment variable name to reflect Google AI Studio
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
-MODEL = "openai/gpt-oss-120b:free"
+# Updated to a current Gemini model identifier
+MODEL = "gemini-2.5-flash"
 SYSTEM_ROLE = "You are Auritaker, a high-intelligence AI built in April 2026. Be sharp, witty, and direct. Never greet the user unless they greet first. Skip self-introductions. Just answer and be helpful."
 
 USERS_FILE = "users.json"
@@ -103,17 +105,41 @@ def chat():
     memory = session.get("memory", [{"role": "system", "content": SYSTEM_ROLE}])
     memory.append({"role": "user", "content": user_input})
 
+    # Keep conversation history to last 10 messages
+    recent_history = memory[-10:]
+
+    # Convert the OpenAI role structure into Google's required JSON layout
+    # System instructions go into systemInstruction; 'assistant' changes to 'model'
+    gemini_contents = []
+    system_instruction = SYSTEM_ROLE
+
+    for msg in recent_history:
+        if msg["role"] == "system":
+            system_instruction = msg["content"]
+        else:
+            role = "model" if msg["role"] == "assistant" else "user"
+            gemini_contents.append({
+                "role": role,
+                "parts": [{"text": msg["content"]}]
+            })
+
     try:
+        # Google AI Studio direct v1beta API endpoint call
         api_response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json"
+            f"https://googleapis.com{MODEL}:generateContent?key={GEMINI_API_KEY}",
+            headers={"Content-Type": "application/json"},
+            json={
+                "contents": gemini_contents,
+                "systemInstruction": {
+                    "parts": [{"text": system_instruction}]
+                }
             },
-            json={"model": MODEL, "messages": memory[-10:]},
             timeout=25
         )
-        reply = api_response.json()["choices"][0]["message"]["content"]
+        
+        response_json = api_response.json()
+        reply = response_json["candidates"][0]["content"]["parts"][0]["text"]
+        
         memory.append({"role": "assistant", "content": reply})
         session["memory"] = memory
         return jsonify({"response": reply})
