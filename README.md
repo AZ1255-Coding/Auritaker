@@ -1,5 +1,5 @@
 # Auritaker AI
-## 🚀 Features
+# 🚀 Features
 
 - ⚡ Fast Flask-based backend
 - 🌐 Web-based AI assistant interface
@@ -11,7 +11,7 @@
 
 ---
 
-## 🏗️ Tech Stack
+# 🏗️ Tech Stack
 
 - Python 
 - Flask 
