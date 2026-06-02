@@ -17,7 +17,7 @@ CORS(app, supports_credentials=True, origins=[
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
-MODEL = "gemini-1.5-flash"  # safer stable model
+MODEL = "gemini-3.1-flash"  # safer stable model
 
 SYSTEM_ROLE = """
 You are Auritaker AI.
@@ -313,8 +313,7 @@ def chat():
     memory["messages"] = memory["messages"][-MAX_MEMORY:]
 
 MAX_MEMORY = 20
-
-    save_memory(memory)
+save_memory(memory)
 
     return jsonify({"response": reply})
 
