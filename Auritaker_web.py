@@ -86,7 +86,10 @@ def should_search(text):
 def web_search(q):
     try:
         res = tavily.search(query=q, max_results=2)
-        return "\n".join([r["content"] for r in res["results"]])[:800]
+        return "\n".join(
+    f"{r['content']}\nSource: {r['url']}"
+    for r in res["results"]
+)[:800]
     except:
         return ""
 
