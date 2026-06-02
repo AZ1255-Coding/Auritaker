@@ -1,45 +1,35 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, send_from_directory
-import requests, os, json
 from flask_cors import CORS
 from tavily import TavilyClient
+import requests, os, json, re
+
+# ---------------- APP SETUP ---------------- #
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "auritaker_secret")
-CORS(app, supports_credentials=True, origins=["https://az1255-coding.github.io"])
+
+CORS(app, supports_credentials=True, origins=[
+    "https://az1255-coding.github.io"
+])
 
 # ---------------- CONFIG ---------------- #
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
-MODEL = "gemini-3.1-flash-lite"
+MODEL = "gemini-1.5-flash"  # safer stable model
 
 SYSTEM_ROLE = """
 You are Auritaker AI.
 
-You are a strict fact-based assistant.
-
 RULES:
-- ONLY use REAL_TIME_CONTEXT JSON for external information.
-- NEVER invent facts.
-- NEVER generate narratives like "dominant discourse", "buzz", "analysts say".
-- If data is missing, respond: "Not available in sources."
-- Prefer short, factual sentences.
+- Use ONLY provided real-time context if given
+- Never invent facts
+- If info is missing say: "Not available in sources."
+- Be concise and factual
 """
 
-USERS_FILE = "users.json"
-
-# ---------------- USERS ---------------- #
-
-def load_users():
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE) as f:
-            return json.load(f)
-    return {"aryanzubin123@gmail.com": "password123"}
-
-def save_users(users):
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f)
+BAD_DOMAINS = ["quora.com", "reddit.com", "medium.com"]
 
 # ---------------- TAVILY ---------------- #
 
@@ -47,32 +37,41 @@ tavily = None
 if TAVILY_API_KEY:
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
-    except:
-        pass
+        print("Tavily initialized")
+    except Exception as e:
+        print("Tavily init failed:", e)
 
-BAD_DOMAINS = ["quora.com", "reddit.com", "medium.com"]
 
-def should_search(text):
-    keys = [
-        "latest", "news", "today", "who is", "what is", "when", "where",
-        "update", "current", "recent", "now", "happened", "score", "match",
-        "weather", "sports", "game", "live"
+def should_search(text: str) -> bool:
+    patterns = [
+        r"\blatest\b", r"\bnews\b", r"\btoday\b",
+        r"\bwho is\b", r"\bwhat is\b",
+        r"\bvs\b", r"\bscore\b", r"\bweather\b",
+        r"\brecent\b", r"\bupdate\b"
     ]
-    return any(k in text.lower() for k in keys)
+    text = text.lower()
+    return any(re.search(p, text) for p in patterns)
+
 
 def clean_results(results):
-    return [
-        r for r in results["results"]
-        if not any(b in r["url"] for b in BAD_DOMAINS)
-    ]
+    safe = []
+    for r in results.get("results", []):
+        url = r.get("url", "")
+        if not any(b in url for b in BAD_DOMAINS):
+            safe.append(r)
+    return safe
 
-def web_search(q):
+
+def web_search(query):
+    if not tavily:
+        return None
+
     try:
-        res = tavily.search(query=q, max_results=5)
+        res = tavily.search(query=query, max_results=5)
         res["results"] = clean_results(res)
 
         structured = {
-            "query": q,
+            "query": query,
             "results": [
                 {
                     "title": r.get("title"),
@@ -83,95 +82,29 @@ def web_search(q):
             ]
         }
 
-        return json.dumps(structured)[:1500]
+        return structured
 
-    except:
-        return ""
+    except Exception as e:
+        print("Tavily error:", e)
+        return None
 
-# ---------------- ROUTES ---------------- #
 
-@app.route('/favicon.ico')
-def favicon():
-    return send_from_directory('static', 'favicon.ico')
+# ---------------- MEMORY ---------------- #
 
-@app.route("/", methods=["GET"])
-def home():
-    if "user" not in session:
-        return redirect("/login")
-    return render_template("index.html")
+def get_memory():
+    return session.get("memory", {
+        "system": SYSTEM_ROLE,
+        "messages": []
+    })
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        u = request.form["username"]
-        p = request.form["password"]
-        if load_users().get(u) == p:
-            session["user"] = u
-            session["memory"] = [{"role": "system", "content": SYSTEM_ROLE}]
-            return redirect("/")
-        return render_template("login.html", error="Invalid credentials")
-    return render_template("login.html")
 
-@app.route("/signup", methods=["GET", "POST"])
-def signup():
-    if request.method == "POST":
-        u = request.form["username"]
-        p = request.form["password"]
-        users = load_users()
+def save_memory(memory):
+    session["memory"] = memory
 
-        if u in users:
-            return render_template("signup.html", error="User exists")
 
-        users[u] = p
-        save_users(users)
+# ---------------- GEMINI ---------------- #
 
-        session["user"] = u
-        session["memory"] = [{"role": "system", "content": SYSTEM_ROLE}]
-        return redirect("/")
-    return render_template("signup.html")
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect("/login")
-
-# ---------------- CHAT ---------------- #
-
-@app.route("/chat", methods=["POST"])
-def chat():
-    if "user" not in session:
-        return jsonify({"response": "Not logged in"})
-
-    user_input = request.json.get("message", "")
-
-    # -------- SEARCH LAYER -------- #
-    if tavily and should_search(user_input):
-        web = web_search(user_input)
-
-        if web:
-            user_input += f"\n\nREAL_TIME_CONTEXT:\n{web}"
-
-    # -------- MEMORY -------- #
-    memory = session.get("memory", [{"role": "system", "content": SYSTEM_ROLE}])
-    memory.append({"role": "user", "content": user_input})
-
-    recent = memory[-10:]
-
-    # -------- GEMINI FORMAT -------- #
-    contents = []
-    system_instruction = SYSTEM_ROLE
-
-    for msg in recent:
-        if msg["role"] == "system":
-            system_instruction = msg["content"]
-        else:
-            role = "model" if msg["role"] == "assistant" else "user"
-            contents.append({
-                "role": role,
-                "parts": [{"text": msg["content"]}]
-            })
-
-    # -------- CALL GEMINI -------- #
+def call_gemini(contents, system_instruction):
     try:
         response = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent?key={GEMINI_API_KEY}",
@@ -187,18 +120,156 @@ def chat():
 
         data = response.json()
 
-        reply = data["candidates"][0]["content"]["parts"][0]["text"]
-
-        memory.append({"role": "assistant", "content": reply})
-        session["memory"] = memory
-
-        return jsonify({"response": reply})
+        return data["candidates"][0]["content"]["parts"][0]["text"]
 
     except Exception as e:
-        return jsonify({"response": f"Error: {str(e)}"})
+        return "Model error: " + str(e)
+
+
+# ---------------- ROUTES ---------------- #
+
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory('static', 'favicon.ico')
+
+
+@app.route("/")
+def home():
+    if "user" not in session:
+        return redirect("/login")
+    return render_template("index.html")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        u = request.form["username"]
+        p = request.form["password"]
+
+        users = load_users()
+        if users.get(u) == p:
+            session["user"] = u
+            session["memory"] = {
+                "system": SYSTEM_ROLE,
+                "messages": []
+            }
+            return redirect("/")
+
+        return render_template("login.html", error="Invalid credentials")
+
+    return render_template("login.html")
+
+
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    if request.method == "POST":
+        u = request.form["username"]
+        p = request.form["password"]
+
+        users = load_users()
+
+        if u in users:
+            return render_template("signup.html", error="User exists")
+
+        users[u] = p
+        save_users(users)
+
+        session["user"] = u
+        session["memory"] = {
+            "system": SYSTEM_ROLE,
+            "messages": []
+        }
+
+        return redirect("/")
+
+    return render_template("signup.html")
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+
+# ---------------- USER STORAGE ---------------- #
+
+USERS_FILE = "users.json"
+
+
+def load_users():
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f)
+
+
+# ---------------- CHAT ---------------- #
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    if "user" not in session:
+        return jsonify({"response": "Not logged in"})
+
+    user_input = request.json.get("message", "")
+
+    memory = get_memory()
+
+    # -------- WEB SEARCH LAYER -------- #
+
+    context = None
+    if should_search(user_input):
+        context = web_search(user_input)
+
+    if context:
+        user_input = {
+            "message": user_input,
+            "real_time_context": context
+        }
+        user_input = json.dumps(user_input)
+
+    # -------- MEMORY BUILD -------- #
+
+    memory["messages"].append({
+        "role": "user",
+        "content": user_input
+    })
+
+    recent = memory["messages"][-10:]
+
+    # -------- GEMINI FORMAT -------- #
+
+    contents = []
+    for msg in recent:
+        role = "user"
+        if msg["role"] == "assistant":
+            role = "model"
+
+        contents.append({
+            "role": role,
+            "parts": [{"text": msg["content"]}]
+        })
+
+    # -------- CALL MODEL -------- #
+
+    reply = call_gemini(contents, memory["system"])
+
+    memory["messages"].append({
+        "role": "assistant",
+        "content": reply
+    })
+
+    save_memory(memory)
+
+    return jsonify({"response": reply})
+
 
 # ---------------- RUN ---------------- #
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 1000))
     app.run(host="0.0.0.0", port=port)
