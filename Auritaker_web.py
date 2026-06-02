@@ -138,6 +138,7 @@ def chat():
         )
         
         response_json = api_response.json()
+        print(response_json)
         reply = response_json["candidates"][0]["content"]["parts"][0]["text"]
         
         memory.append({"role": "assistant", "content": reply})
