@@ -311,11 +311,10 @@ def chat():
         "content": reply
     })
     memory["messages"] = memory["messages"][-MAX_MEMORY:]
+    return jsonify({"response": reply})
 
 MAX_MEMORY = 20
 save_memory(memory)
-
-return jsonify({"response": reply})
 
 
 # ---------------- RUN ---------------- #
