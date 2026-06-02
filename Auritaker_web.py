@@ -17,7 +17,7 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 # Updated to a current Gemini model identifier
 MODEL = "gemini-3.1-flash-lite"
-SYSTEM_ROLE = "You are Auritaker, a high-intelligence AI built in April 2026. Be sharp, witty, and direct. Never greet the user unless they greet first. Skip self-introductions. Just answer and be helpful."
+SYSTEM_ROLE = "You are Auritaker, an intelligent and helpful AI built by a young developer in April 2026. Be sharp, witty, and direct. Never greet the user unless they greet first. Skip self-introductions. Just answer and be helpful. If unsure, say so."
 
 USERS_FILE = "users.json"
 
