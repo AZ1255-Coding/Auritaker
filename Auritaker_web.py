@@ -16,7 +16,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 # Updated to a current Gemini model identifier
-MODEL = "gemini-4-31b"
+MODEL = "google/gemma-4-31b:free"
 SYSTEM_ROLE = "You are Auritaker, a high-intelligence AI built in April 2026. Be sharp, witty, and direct. Never greet the user unless they greet first. Skip self-introductions. Just answer and be helpful."
 
 USERS_FILE = "users.json"
