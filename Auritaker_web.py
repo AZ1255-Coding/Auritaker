@@ -315,7 +315,7 @@ def chat():
 MAX_MEMORY = 20
 save_memory(memory)
 
-    return jsonify({"response": reply})
+return jsonify({"response": reply})
 
 
 # ---------------- RUN ---------------- #
