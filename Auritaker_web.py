@@ -310,9 +310,9 @@ def chat():
         "role": "assistant",
         "content": reply
     })
+    memory["messages"] = memory["messages"][-MAX_MEMORY:]
 
-    MAX_MEMORY = 20
-memory["messages"] = memory["messages"][-MAX_MEMORY:]
+MAX_MEMORY = 20
 
     save_memory(memory)
 
