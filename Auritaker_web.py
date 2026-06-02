@@ -106,21 +106,65 @@ def save_memory(memory):
 
 def call_gemini(contents, system_instruction):
     try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent?key={GEMINI_API_KEY}"
+
+        payload = {
+            "contents": contents,
+            "systemInstruction": {
+                "parts": [{"text": system_instruction}]
+            }
+        }
+
         response = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent?key={GEMINI_API_KEY}",
+            url,
             headers={"Content-Type": "application/json"},
-            json={
-                "contents": contents,
-                "systemInstruction": {
-                    "parts": [{"text": system_instruction}]
-                }
-            },
+            json=payload,
             timeout=25
         )
 
+        # ---------------- HTTP CHECK ---------------- #
+        if response.status_code != 200:
+            return f"HTTP {response.status_code}: {response.text}"
+
         data = response.json()
 
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        # ---------------- ERROR HANDLING ---------------- #
+        if "error" in data:
+            return "Model error: " + data["error"].get("message", "Unknown error")
+
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return "Model error: No candidates returned"
+
+        content = candidates[0].get("content", {})
+        parts = content.get("parts", [])
+
+        if not parts:
+            return "Model error: Empty response parts"
+
+        return parts[0].get("text", "").strip() or "Model error: empty text"
+
+    except Exception as e:
+        return "Model error: " + str(e)
+
+        # ---------------- SAFETY CHECKS ---------------- #
+
+        if "error" in data:
+            return "Model error: " + data["error"].get("message", "Unknown error")
+
+        if "candidates" not in data or not data["candidates"]:
+            return "Model error: No candidates returned"
+
+        candidate = data["candidates"][0]
+
+        if "content" not in candidate:
+            return "Model error: Empty content"
+
+        parts = candidate["content"].get("parts", [])
+        if not parts:
+            return "Model error: Empty parts"
+
+        return parts[0].get("text", "Model error: empty text")
 
     except Exception as e:
         return "Model error: " + str(e)
@@ -230,8 +274,12 @@ def chat():
             "message": user_input,
             "real_time_context": context
         }
-        user_input = json.dumps(user_input)
-
+        contents.append({
+    "role": "user",
+    "parts": [{
+        "text": f"{user_input}"
+    }]
+})
     # -------- MEMORY BUILD -------- #
 
     memory["messages"].append({
@@ -262,6 +310,9 @@ def chat():
         "role": "assistant",
         "content": reply
     })
+
+    MAX_MEMORY = 20
+memory["messages"] = memory["messages"][-MAX_MEMORY:]
 
     save_memory(memory)
 
