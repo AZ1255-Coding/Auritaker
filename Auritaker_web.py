@@ -19,7 +19,7 @@ MAX_MEMORY = 20
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
-MODEL = "gemini-3.1-flash"
+MODEL = "gemini-3.1-flash-lite"
 
 SYSTEM_ROLE = """
 You are Auritaker AI.
