@@ -242,20 +242,13 @@ def chat():
     user_input = request.json.get("message", "")
     memory = get_memory()
 
-    # -------- WEB SEARCH -------- #
+        # -------- WEB SEARCH -------- #
     context = None
     if should_search(user_input):
         context = web_search(user_input)
 
-    if context:
-        user_input = f"""
-User Query: {user_input}
-
-Real-time context:
-{json.dumps(context, indent=2)}
-"""
-
     # -------- SAVE USER MESSAGE -------- #
+    # Always save the clean, original question to your long-term history
     memory["messages"].append({
         "role": "user",
         "content": user_input
@@ -271,6 +264,15 @@ Real-time context:
             "role": role,
             "parts": [{"text": msg["content"]}]
         })
+
+    # Inject Tavily context strictly into the last message item going to Gemini
+    if context:
+        contents[-1]["parts"][0]["text"] = f"""
+User Query: {user_input}
+
+Real-time context:
+{json.dumps(context, indent=2)}
+"""
 
     # -------- CALL GEMINI -------- #
     reply = call_gemini(contents, memory["system"])
