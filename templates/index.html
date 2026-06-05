@@ -223,7 +223,7 @@
         <header class="topbar">
             <button class="menu-btn" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
             <div id="current-chat-title">Auritaker AI</div>
-            <div class="model-badge">Auto · Free</div>
+            <div class="model-badge">Sports · AI · Designed to help you in sports queries</div>
         </header>
         <div id="chat-box">
             <div class="chat-inner" id="chat-inner">
@@ -244,6 +244,10 @@
             <div class="input-wrap">
                 <div class="input-box">
                     <textarea id="user-input" placeholder="Ask anything..." rows="1" autocomplete="off"></textarea>
+                    <input type="file" id="image-input" accept="image/*" style="display:none;">
+                    <button id="img-btn" onclick="document.getElementById('image-input').click()">
+                    <i class="fas fa-image"></i>
+                    </button>
                     <button id="send-btn" onclick="sendMessage()"><i class="fas fa-arrow-up"></i></button>
                 </div>
                 <div class="input-hint">AURITAKER · WEB-ENHANCED · AI</div>
@@ -275,6 +279,11 @@
         renderSidebar();
 
         const textarea = document.getElementById('user-input');
+        let selectedImage = null;
+
+        document.getElementById("image-input").addEventListener("change", (e) => {
+            selectedImage = e.target.files[0];
+        });
         textarea.addEventListener('input', () => {
             textarea.style.height = 'auto';
             textarea.style.height = Math.min(textarea.scrollHeight, 160) + 'px';
@@ -643,10 +652,15 @@
             document.getElementById('send-btn').disabled = true;
             showTyping();
             try {
+                const formData = new FormData();
+                formData.append("message", text);
+
+                if (selectedImage) {
+                    formData.append("image", selectedImage);
+                    }
                 const res = await fetch(BACKEND_URL + '/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: text }),
+                    body: formData,
                     credentials: 'include'
                 });
                 const json = await res.json();
