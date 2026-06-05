@@ -92,7 +92,8 @@ def chat():
     if "user" not in session:
         return jsonify({"response": "Not logged in"})
 
-    user_input = request.json.get("message", "")
+    user_input = request.form.get("message", "")
+image_file = request.files.get("image")
 
     memory = get_memory()
 
