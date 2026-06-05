@@ -587,7 +587,7 @@
         }
 
         // ── Messages ──
-        function appendMessage(role, text) {
+        function appendMessage(role, text, imageUrl = null) {
             const welcome = document.getElementById('welcome-screen');
             if (welcome) welcome.remove();
             const inner = document.getElementById('chat-inner');
@@ -602,6 +602,9 @@
                 .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
                 .replace(/\n/g,'<br>');
             wrap.innerHTML = `${avatarHTML}<div class="msg-bubble">${formatted}</div>`;
+            let imageHTML = imageUrl
+                ? `<img src="${imageUrl}" style="max-width:200px;border-radius:10px;margin-top:8px;">`
+                : "";
             inner.appendChild(wrap);
             document.getElementById('chat-box').scrollTop = 99999;
         }
@@ -613,7 +616,7 @@
             const wrap = document.createElement('div');
             wrap.className = 'message ai';
             wrap.id = 'typing-indicator';
-            wrap.innerHTML = `<div class="msg-avatar ai">A</div><div class="msg-bubble"><div class="typing-dots"><span></span><span></span><span></span></div></div>`;
+            wrap.innerHTML = `<div class="msg-avatar ai">A</div><div class="msg-bubble">${formatted}${imageHTML}</div><div class="typing-dots"><span></span><span></span><span></span></div></div>`;
             inner.appendChild(wrap);
             document.getElementById('chat-box').scrollTop = 99999;
         }
@@ -682,9 +685,11 @@
             } finally {
                 isLoading = false;
                 document.getElementById('send-btn').disabled = false;
-            }
-        }
 
+                selectedImage = null;
+                document.getElementById("image-input").value = "";
+            }
+            
         // ── Modals ──
         function closeModal(id) {
             document.getElementById(id).classList.remove('show');
