@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, send_from_directory
 from flask_cors import CORS
+from flask_session import Session  # Resolves the 4KB cookie overflow issue
 from tavily import TavilyClient
 import requests, os, json, re
 
@@ -7,6 +8,11 @@ import requests, os, json, re
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "auritaker_secret")
+
+# Configure Server-Side Sessions
+app.config["SESSION_TYPE"] = "filesystem"
+app.config["SESSION_PERMANENT"] = False
+Session(app)
 
 CORS(app, supports_credentials=True, origins=[
     "https://az1255-coding.github.io"
@@ -101,6 +107,7 @@ def get_memory():
 
 def save_memory(memory):
     session["memory"] = memory
+    session.modified = True  # Explicitly tell Flask the session changed
 
 
 # ---------------- GEMINI ---------------- #
@@ -184,8 +191,8 @@ def home():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        u = request.form["username"]
-        p = request.form["password"]
+        u = request.form.get("username", "")
+        p = request.form.get("password", "")
 
         users = load_users()
         if users.get(u) == p:
@@ -204,8 +211,8 @@ def login():
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if request.method == "POST":
-        u = request.form["username"]
-        p = request.form["password"]
+        u = request.form.get("username", "")
+        p = request.form.get("password", "")
 
         users = load_users()
 
@@ -237,18 +244,22 @@ def logout():
 @app.route("/chat", methods=["POST"])
 def chat():
     if "user" not in session:
-        return jsonify({"response": "Not logged in"})
+        return jsonify({"response": "Not logged in"}), 401
 
-    user_input = request.json.get("message", "")
+    req_data = request.get_json(silent=True) or {}
+    user_input = req_data.get("message", "")
+    
+    if not user_input.strip():
+        return jsonify({"response": "Empty message string"}), 400
+
     memory = get_memory()
 
-        # -------- WEB SEARCH -------- #
+    # -------- WEB SEARCH -------- #
     context = None
     if should_search(user_input):
         context = web_search(user_input)
 
     # -------- SAVE USER MESSAGE -------- #
-    # Always save the clean, original question to your long-term history
     memory["messages"].append({
         "role": "user",
         "content": user_input
@@ -267,12 +278,7 @@ def chat():
 
     # Inject Tavily context strictly into the last message item going to Gemini
     if context:
-        contents[-1]["parts"][0]["text"] = f"""
-User Query: {user_input}
-
-Real-time context:
-{json.dumps(context, indent=2)}
-"""
+        contents[-1]["parts"][0]["text"] = f"User Query: {user_input}\n\nReal-time context:\n{json.dumps(context, indent=2)}"
 
     # -------- CALL GEMINI -------- #
     reply = call_gemini(contents, memory["system"])
@@ -284,7 +290,6 @@ Real-time context:
     })
 
     memory["messages"] = memory["messages"][-MAX_MEMORY:]
-
     save_memory(memory)
 
     return jsonify({"response": reply})
