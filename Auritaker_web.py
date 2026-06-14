@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, jsonify, session, redirect, s
 from flask_cors import CORS
 from flask_session import Session  # Resolves the 4KB cookie overflow issue
 from tavily import TavilyClient
-import requests, os, json, re
+import requests, os, json, re, base64
 
 # ---------------- APP SETUP ---------------- #
 
@@ -25,10 +25,10 @@ MAX_MEMORY = 20
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
-MODEL = "gemini-3.1-flash-lite"
+MODEL = "gemini-1.5-flash"
 
 SYSTEM_ROLE = """
-You are Auritaker AI.
+You are Auritaker AI, a multimodal sports assistant.
 
 RULES:
 - Prioritize provided real-time context when available.
@@ -36,6 +36,7 @@ RULES:
 - Never fabricate specific facts.
 - If information cannot be verified, say: "Not available in sources."
 - Be concise and factual.
+- When analyzing images, provide detailed insights about sports-related content.
 """
 
 BAD_DOMAINS = ["quora.com", "reddit.com", "medium.com"]
@@ -108,6 +109,26 @@ def get_memory():
 def save_memory(memory):
     session["memory"] = memory
     session.modified = True  # Explicitly tell Flask the session changed
+
+
+# ---------------- IMAGE HANDLING ---------------- #
+
+def encode_image_to_base64(file_obj):
+    """Convert uploaded file to base64 string"""
+    return base64.b64encode(file_obj.read()).decode('utf-8')
+
+
+def get_mime_type(filename):
+    """Get MIME type from filename"""
+    ext = filename.lower().split('.')[-1]
+    mime_types = {
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'png': 'image/png',
+        'gif': 'image/gif',
+        'webp': 'image/webp'
+    }
+    return mime_types.get(ext, 'image/jpeg')
 
 
 # ---------------- GEMINI ---------------- #
@@ -239,46 +260,91 @@ def logout():
     return redirect("/login")
 
 
-# ---------------- CHAT ---------------- #
+# ---------------- CHAT (MULTIMODAL) ---------------- #
 
 @app.route("/chat", methods=["POST"])
 def chat():
     if "user" not in session:
         return jsonify({"response": "Not logged in"}), 401
 
-    req_data = request.get_json(silent=True) or {}
-    user_input = req_data.get("message", "")
-    
-    if not user_input.strip():
-        return jsonify({"response": "Empty message string"}), 400
+    # Handle both JSON and FormData
+    user_input = ""
+    image_data = None
+    mime_type = None
+
+    # Try to get message from JSON first
+    if request.is_json:
+        req_data = request.get_json(silent=True) or {}
+        user_input = req_data.get("message", "")
+    else:
+        # Get from FormData
+        user_input = request.form.get("message", "")
+
+    # Handle image upload
+    if "image" in request.files:
+        image_file = request.files["image"]
+        if image_file and image_file.filename:
+            try:
+                image_data = encode_image_to_base64(image_file)
+                mime_type = get_mime_type(image_file.filename)
+                print(f"Image received: {image_file.filename} ({mime_type})")
+            except Exception as e:
+                print(f"Image processing error: {e}")
+                return jsonify({"response": f"Error processing image: {str(e)}"}), 400
+
+    if not user_input.strip() and not image_data:
+        return jsonify({"response": "Empty message and no image"}), 400
 
     memory = get_memory()
 
-    # -------- WEB SEARCH -------- #
+    # -------- WEB SEARCH (only if text and triggers pattern) -------- #
     context = None
-    if should_search(user_input):
+    if user_input.strip() and should_search(user_input):
         context = web_search(user_input)
 
-    # -------- SAVE USER MESSAGE -------- #
-    memory["messages"].append({
+    # -------- SAVE USER MESSAGE TO MEMORY -------- #
+    message_record = {
         "role": "user",
-        "content": user_input
-    })
+        "content": user_input if user_input.strip() else "[Image shared]"
+    }
+    if image_data:
+        message_record["image_base64"] = image_data
+        message_record["image_mime"] = mime_type
+
+    memory["messages"].append(message_record)
 
     recent = memory["messages"][-10:]
 
-    # -------- BUILD GEMINI INPUT -------- #
+    # -------- BUILD GEMINI INPUT (MULTIMODAL) -------- #
     contents = []
     for msg in recent:
         role = "model" if msg["role"] == "assistant" else "user"
-        contents.append({
-            "role": role,
-            "parts": [{"text": msg["content"]}]
-        })
+        parts = []
 
-    # Inject Tavily context strictly into the last message item going to Gemini
-    if context:
-        contents[-1]["parts"][0]["text"] = f"User Query: {user_input}\n\nReal-time context:\n{json.dumps(context, indent=2)}"
+        # Add text
+        text_content = msg.get("content", "")
+        if text_content:
+            parts.append({"text": text_content})
+
+        # Add image if present
+        if msg.get("image_base64"):
+            parts.append({
+                "inlineData": {
+                    "mimeType": msg.get("image_mime", "image/jpeg"),
+                    "data": msg["image_base64"]
+                }
+            })
+
+        if parts:
+            contents.append({"role": role, "parts": parts})
+
+    # -------- INJECT WEB SEARCH CONTEXT INTO LAST USER MESSAGE -------- #
+    if context and contents and contents[-1]["role"] == "user":
+        context_text = f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
+        if contents[-1]["parts"] and "text" in contents[-1]["parts"][0]:
+            contents[-1]["parts"][0]["text"] += context_text
+        else:
+            contents[-1]["parts"].insert(0, {"text": context_text})
 
     # -------- CALL GEMINI -------- #
     reply = call_gemini(contents, memory["system"])
