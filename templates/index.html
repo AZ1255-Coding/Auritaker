@@ -677,7 +677,18 @@
                 }
             }
             
-            wrap.appendChild(avatarHTML);
+            const avatar = document.createElement('div');
+
+                if (role === 'user') {
+                avatar.className = 'msg-avatar user-av';
+                avatar.innerHTML = '<i class="fas fa-user" style="font-size:10px;"></i>';
+                } else {
+                    avatar.className = 'msg-avatar ai';
+                    avatar.textContent = 'A';
+}
+
+wrap.appendChild(avatar);
+wrap.appendChild(contentDiv);
             wrap.appendChild(contentDiv);
             inner.appendChild(wrap);
             document.getElementById('chat-box').scrollTop = 99999;
