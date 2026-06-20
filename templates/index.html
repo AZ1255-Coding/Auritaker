@@ -111,17 +111,33 @@
         .msg-bubble { max-width: 75%; padding: 11px 14px; border-radius: 14px; font-size: 14px; line-height: 1.65; }
         .message.user .msg-bubble { background: var(--user-bg); border: 1px solid rgba(79,142,255,0.15); color: #c8d8f5; border-radius: 14px 4px 14px 14px; }
         .message.ai .msg-bubble { background: var(--ai-bg); border: 1px solid var(--border); color: var(--text); border-radius: 4px 14px 14px 14px; }
+        
+        /* Embedded Image Rendering Style */
+        .msg-attached-img { max-width: 100%; max-height: 250px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); margin-top: 8px; display: block; object-fit: contain; }
+        
         .typing-dots { display: flex; gap: 5px; padding: 4px 0; align-items: center; }
         .typing-dots span { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; opacity: 0.4; animation: dot 1.4s ease-in-out infinite; }
         .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
         .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
         @keyframes dot { 0%,60%,100%{opacity:0.2;transform:scale(0.8)} 30%{opacity:1;transform:scale(1.1)} }
         .input-area { padding: 14px 20px 18px; flex-shrink: 0; }
-        .input-wrap { max-width: 720px; margin: 0 auto; }
-        .input-box { display: flex; align-items: flex-end; gap: 10px; background: var(--surface); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 9px 9px 9px 14px; transition: border-color 0.2s, box-shadow 0.2s; }
+        .input-wrap { max-width: 720px; margin: 0 auto; position: relative; }
+        
+        /* Preserved exact layouts with added inside upload button alignment and layout styling */
+        .input-box { display: flex; align-items: flex-end; gap: 10px; background: var(--surface); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 9px 9px 9px 14px; transition: border-color 0.2s, box-shadow 0.2s; position: relative; }
         .input-box:focus-within { border-color: rgba(79,142,255,0.4); box-shadow: 0 0 0 3px rgba(79,142,255,0.07); }
         #user-input { flex: 1; background: none; border: none; outline: none; color: var(--text); font-size: 14px; font-family: 'DM Sans', sans-serif; resize: none; max-height: 160px; min-height: 24px; line-height: 1.5; padding: 3px 0; }
         #user-input::placeholder { color: #2d3d5a; }
+        
+        /* Seamless image upload trigger button style matching input context */
+        .img-upload-btn { background: none; border: none; color: var(--muted); cursor: pointer; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: color 0.15s; margin-bottom: 3px; flex-shrink: 0; }
+        .img-upload-btn:hover { color: var(--text); }
+        
+        /* Floating mini UI element container layout for local live view validation */
+        .inline-img-preview { display: none; position: absolute; top: -56px; left: 14px; background: #0e1828; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 4px; z-index: 20; height: 46px; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+        .inline-img-preview img { height: 100%; width: 36px; object-fit: cover; border-radius: 4px; }
+        .inline-img-preview button { background: none; border: none; color: var(--danger); cursor: pointer; padding: 0 6px; font-size: 11px; }
+
         #send-btn { width: 36px; height: 36px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border: none; border-radius: 9px; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; transition: all 0.2s; box-shadow: 0 4px 12px rgba(79,142,255,0.3); }
         #send-btn:hover { transform: scale(1.05); box-shadow: 0 6px 18px rgba(79,142,255,0.4); }
         #send-btn:active { transform: scale(0.95); }
@@ -242,7 +258,13 @@
         </div>
         <div class="input-area">
             <div class="input-wrap">
+                <div class="inline-img-preview" id="img-preview-box">
+                    <img src="" id="img-preview-el">
+                    <button onclick="removeSelectedImage()"><i class="fas fa-times"></i></button>
+                </div>
                 <div class="input-box">
+                    <input type="file" id="hidden-file-input" accept="image/*" style="display:none;" onchange="imageSelected(this)">
+                    <button class="img-upload-btn" onclick="document.getElementById('hidden-file-input').click()" title="Upload Image"><i class="fas fa-image"></i></button>
                     <textarea id="user-input" placeholder="Ask anything..." rows="1" autocomplete="off"></textarea>
                     <button id="send-btn" onclick="sendMessage()"><i class="fas fa-arrow-up"></i></button>
                 </div>
@@ -258,6 +280,7 @@
         let isLoading = false;
         let ctxTarget = null;
         let pendingAction = null;
+        let currentBase64Image = null;
 
         function getData() {
             return {
@@ -299,6 +322,25 @@
             textarea.value = el.querySelector('.suggestion-text').innerText;
             textarea.dispatchEvent(new Event('input'));
             sendMessage();
+        }
+
+        // ── Image State Processing ──
+        function imageSelected(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                currentBase64Image = e.target.result;
+                document.getElementById('img-preview-el').src = currentBase64Image;
+                document.getElementById('img-preview-box').style.display = 'flex';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function removeSelectedImage() {
+            currentBase64Image = null;
+            document.getElementById('hidden-file-input').value = '';
+            document.getElementById('img-preview-box').style.display = 'none';
         }
 
         // ── Sidebar ──
@@ -562,6 +604,7 @@
                     </div>
                 </div>`;
             document.getElementById('current-chat-title').textContent = 'Auritaker AI';
+            removeSelectedImage();
             renderSidebar();
         }
 
@@ -573,12 +616,13 @@
             document.getElementById('current-chat-title').textContent = chat.title;
             const inner = document.getElementById('chat-inner');
             inner.innerHTML = '';
-            chat.messages.forEach(m => appendMessage(m.role, m.text));
+            chat.messages.forEach(m => appendMessage(m.role, m.text, m.image));
+            removeSelectedImage();
             renderSidebar();
         }
 
         // ── Messages ──
-        function appendMessage(role, text) {
+        function appendMessage(role, text, imageSrc = null) {
             const welcome = document.getElementById('welcome-screen');
             if (welcome) welcome.remove();
             const inner = document.getElementById('chat-inner');
@@ -587,12 +631,19 @@
             const avatarHTML = role === 'user'
                 ? `<div class="msg-avatar user-av"><i class="fas fa-user" style="font-size:10px;"></i></div>`
                 : `<div class="msg-avatar ai">A</div>`;
+            
             let formatted = text
                 .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
                 .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
                 .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
                 .replace(/\n/g,'<br>');
-            wrap.innerHTML = `${avatarHTML}<div class="msg-bubble">${formatted}</div>`;
+
+            let imageHTML = '';
+            if (imageSrc) {
+                imageHTML = `<img src="${imageSrc}" class="msg-attached-img" alt="Uploaded Attachment">`;
+            }
+
+            wrap.innerHTML = `${avatarHTML}<div class="msg-bubble">${formatted}${imageHTML}</div>`;
             inner.appendChild(wrap);
             document.getElementById('chat-box').scrollTop = 99999;
         }
@@ -625,20 +676,27 @@
         async function sendMessage() {
             if (isLoading) return;
             const text = textarea.value.trim();
-            if (!text) return;
+            const attachedImage = currentBase64Image;
+
+            if (!text && !attachedImage) return;
             if (!currentChatId) currentChatId = Date.now();
-            appendMessage('user', text);
+            
+            appendMessage('user', text, attachedImage);
+            
             const data = getData();
             let chat = data.chats.find(c => c.id === currentChatId);
             if (!chat) {
-                chat = { id: currentChatId, title: text.substring(0, 32), messages: [], projectId: null };
+                chat = { id: currentChatId, title: text ? text.substring(0, 32) : "Image Reference", messages: [], projectId: null };
                 data.chats.push(chat);
             }
-            chat.messages.push({ role: 'user', text });
+            chat.messages.push({ role: 'user', text, image: attachedImage });
             saveData(data);
+            
             textarea.value = '';
             textarea.style.height = 'auto';
+            removeSelectedImage();
             renderSidebar();
+            
             isLoading = true;
             document.getElementById('send-btn').disabled = true;
             showTyping();
@@ -646,7 +704,10 @@
                 const res = await fetch(BACKEND_URL + '/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: text }),
+                    body: JSON.stringify({ 
+                        message: text,
+                        image: attachedImage 
+                    }),
                     credentials: 'include'
                 });
                 const json = await res.json();
