@@ -25,6 +25,7 @@ MAX_MEMORY = 20
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
+# Keeping your exact choice here!
 MODEL = "gemini-3.1-flash-lite"
 
 SYSTEM_ROLE = """
@@ -129,6 +130,19 @@ def get_mime_type(filename):
         'webp': 'image/webp'
     }
     return mime_types.get(ext, 'image/jpeg')
+
+
+def parse_base64_data(data_url):
+    """Extract content type metadata and raw data values from base64 string"""
+    if not data_url or "," not in data_url:
+        return None, None
+    try:
+        header, base64_str = data_url.split(",", 1)
+        mime_match = re.search(r"data:(.*?);base64", header)
+        mime = mime_match.group(1) if mime_match else "image/jpeg"
+        return base64_str, mime
+    except Exception:
+        return None, None
 
 
 # ---------------- GEMINI ---------------- #
@@ -267,27 +281,27 @@ def chat():
     if "user" not in session:
         return jsonify({"response": "Not logged in"}), 401
 
-    # Handle both JSON and FormData
     user_input = ""
     image_data = None
     mime_type = None
 
-    # Try to get message from JSON first
     if request.is_json:
         req_data = request.get_json(silent=True) or {}
         user_input = req_data.get("message", "")
+        raw_image_url = req_data.get("image", None)
+        
+        if raw_image_url:
+            image_data, mime_type = parse_base64_data(raw_image_url)
     else:
-        # Get from FormData
         user_input = request.form.get("message", "")
 
-    # Handle image upload
     if "image" in request.files:
         image_file = request.files["image"]
         if image_file and image_file.filename:
             try:
                 image_data = encode_image_to_base64(image_file)
                 mime_type = get_mime_type(image_file.filename)
-                print(f"Image received: {image_file.filename} ({mime_type})")
+                print(f"Image received via form: {image_file.filename} ({mime_type})")
             except Exception as e:
                 print(f"Image processing error: {e}")
                 return jsonify({"response": f"Error processing image: {str(e)}"}), 400
@@ -297,7 +311,7 @@ def chat():
 
     memory = get_memory()
 
-    # -------- WEB SEARCH (only if text and triggers pattern) -------- #
+    # -------- WEB SEARCH -------- #
     context = None
     if user_input.strip() and should_search(user_input):
         context = web_search(user_input)
@@ -315,18 +329,15 @@ def chat():
 
     recent = memory["messages"][-10:]
 
-    # -------- BUILD GEMINI INPUT (MULTIMODAL) -------- #
+    # -------- BUILD GEMINI INPUT -------- #
     contents = []
     for msg in recent:
         role = "model" if msg["role"] == "assistant" else "user"
         parts = []
 
-        # Add text
-        text_content = msg.get("content", "")
-        if text_content:
-            parts.append({"text": text_content})
+        if msg.get("content"):
+            parts.append({"text": msg["content"]})
 
-        # Add image if present
         if msg.get("image_base64"):
             parts.append({
                 "inlineData": {
@@ -338,7 +349,7 @@ def chat():
         if parts:
             contents.append({"role": role, "parts": parts})
 
-    # -------- INJECT WEB SEARCH CONTEXT INTO LAST USER MESSAGE -------- #
+    # -------- INJECT WEB SEARCH CONTEXT -------- #
     if context and contents and contents[-1]["role"] == "user":
         context_text = f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
         if contents[-1]["parts"] and "text" in contents[-1]["parts"][0]:
