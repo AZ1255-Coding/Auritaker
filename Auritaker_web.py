@@ -3,6 +3,7 @@ from flask_cors import CORS
 from flask_session import Session  # Resolves the 4KB cookie overflow issue
 from tavily import TavilyClient
 import requests, os, json, re, base64
+from duckduckgo_search import DDGS
 
 # ---------------- APP SETUP ---------------- #
 
@@ -74,29 +75,31 @@ def clean_results(results):
 
 
 def web_search(query):
-    if not tavily:
-        return None
-
     try:
-        res = tavily.search(query=query, max_results=5)
-        res["results"] = clean_results(res)
+        # DDGS() initiates a direct, anonymous connection to DuckDuckGo's live index
+        with DDGS() as ddgs:
+            # Fetches top 5 live web results matching the query
+            results = list(ddgs.text(query, max_results=5))
+        
+        cleaned_results = []
+        for item in results:
+            url_link = item.get("href", "")
+            # Filter out your bad domains list
+            if not any(b in url_link for b in BAD_DOMAINS):
+                cleaned_results.append({
+                    "title": item.get("title"),
+                    "snippet": item.get("body"),  # DDG's organic index page snippet
+                    "url": url_link
+                })
 
         return {
             "query": query,
-            "results": [
-                {
-                    "title": r.get("title"),
-                    "snippet": r.get("content"),
-                    "url": r.get("url")
-                }
-                for r in res["results"]
-            ]
+            "results": cleaned_results
         }
 
     except Exception as e:
-        print("Tavily error:", e)
+        print("DuckDuckGo Search error:", e)
         return None
-
 
 # ---------------- MEMORY ---------------- #
 
