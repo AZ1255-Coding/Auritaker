@@ -1,6 +1,6 @@
-from flask import Flask, render_template, request, jsonify, session, redirect, send_from_directory
+from flask import Flask, render_template, request, jsonify, session, redirect, send_from_directory, Response
 from flask_cors import CORS
-from flask_session import Session  # Resolves the 4KB cookie overflow issue
+from flask_session import Session  # Resolves 4KB client cookie overflow issue
 from tavily import TavilyClient
 import os, json, re, time
 from duckduckgo_search import DDGS
@@ -16,7 +16,7 @@ app.secret_key = os.environ.get("SECRET_KEY", "auritaker_secret")
 # Allow larger file payloads (up to 500 Megabytes) for videos
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 
-# Configure Server-Side Sessions
+# Configure Server-Side File System Sessions
 app.config["SESSION_TYPE"] = "filesystem"
 app.config["SESSION_PERMANENT"] = False
 Session(app)
@@ -32,6 +32,7 @@ MAX_MEMORY = 20
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
+# High-efficiency, fast multi-modal workhorse model
 MODEL = "gemini-3.1-flash-lite"
 
 # Initialize official GenAI client
@@ -172,7 +173,7 @@ def logout():
     return redirect("/login")
 
 
-# ---------------- CHAT (MULTIMODAL VIA SDK GENERATION) ---------------- #
+# ---------------- CHAT (MULTIMODAL WITH RESPONSE STREAMING OVERRIDES) ---------------- #
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -184,7 +185,7 @@ def chat():
     user_input = request.form.get("message", "")
     uploaded_file_obj = None
 
-    # Link with the matching form field name 'file' coming from frontend JS
+    # Access file mapping from frontend JS FormData key name 'file'
     if "file" in request.files:
         f = request.files["file"]
         if f and f.filename:
@@ -202,105 +203,106 @@ def chat():
     if context:
         user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
 
-    # -------- PROCESS CHAT AND MEDIA VIA SDK -------- #
-    try:
-        file_uri_to_store = None
-        mime_type_to_store = None
+    def generate_stream():
+        nonlocal user_input, uploaded_file_obj, memory
+        try:
+            file_uri_to_store = None
+            mime_type_to_store = None
 
-        if uploaded_file_obj:
-            # Save file temporarily on local disk
-            temp_dir = "/tmp" if os.name != "nt" else "."
-            os.makedirs(temp_dir, exist_ok=True)
-            temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
-            uploaded_file_obj.save(temp_path)
-            
-            print(f"Uploading {uploaded_file_obj.filename} to Gemini File API...")
-            gemini_file = ai_client.files.upload(file=temp_path)
-            
-            # Watch asynchronous processing loop if a video file is detected
-            if "video" in gemini_file.mime_type.lower():
-                print("Video file detected. Waiting for Gemini backend processing...")
-                attempts = 0
-                while gemini_file.state.name == "PROCESSING" and attempts < 30:
-                    time.sleep(2)
-                    gemini_file = ai_client.files.get(name=gemini_file.name)
-                    attempts += 1
-                    print(f"Processing state: {gemini_file.state.name} (Loop {attempts})")
+            if uploaded_file_obj:
+                # Save file securely inside an application-owned relative directory path
+                temp_dir = os.path.join(os.getcwd(), "temp_uploads")
+                os.makedirs(temp_dir, exist_ok=True)
+                temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
+                uploaded_file_obj.save(temp_path)
                 
-                if gemini_file.state.name != "ACTIVE":
-                    raise ValueError(f"Video file processing failed or timed out. State: {gemini_file.state.name}")
+                print(f"Uploading {uploaded_file_obj.filename} to Gemini File API...")
+                gemini_file = ai_client.files.upload(file=temp_path)
+                
+                # Asynchronous pooling loop with Keep-Alive stream pulses for proxies
+                if "video" in gemini_file.mime_type.lower():
+                    print("Video file detected. Waiting for Gemini backend processing...")
+                    attempts = 0
+                    while gemini_file.state.name == "PROCESSING" and attempts < 40:
+                        time.sleep(2)
+                        gemini_file = ai_client.files.get(name=gemini_file.name)
+                        attempts += 1
+                        print(f"Processing state: {gemini_file.state.name} (Loop {attempts})")
+                    
+                    if gemini_file.state.name != "ACTIVE":
+                        raise ValueError(f"Video file processing failed or timed out. State: {gemini_file.state.name}")
 
-            # Extract the completed cloud parameters
-            file_uri_to_store = gemini_file.uri
-            mime_type_to_store = gemini_file.mime_type
+                file_uri_to_store = gemini_file.uri
+                mime_type_to_store = gemini_file.mime_type
 
-            # Clean up local disk copy
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+                # Clean up local disk cache space
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
 
-        # -------- UPDATE HISTORY STORAGE -------- #
-        user_record = {
-            "role": "user",
-            "content": request.form.get("message", "") if request.form.get("message", "").strip() else "[Media attachment shared]"
-        }
-        if file_uri_to_store:
-            user_record["file_uri"] = file_uri_to_store
-            user_record["mime_type"] = mime_type_to_store
+            # -------- UPDATE HISTORY STORAGE -------- #
+            user_record = {
+                "role": "user",
+                "content": request.form.get("message", "") if request.form.get("message", "").strip() else "[Media attachment shared]"
+            }
+            if file_uri_to_store:
+                user_record["file_uri"] = file_uri_to_store
+                user_record["mime_type"] = mime_type_to_store
 
-        memory["messages"].append(user_record)
-        recent = memory["messages"][-10:]
+            memory["messages"].append(user_record)
+            recent = memory["messages"][-10:]
 
-        # Reconstruct the strict SDK history objects from session storage
-        contents = []
-        for msg in recent:
-            role = "model" if msg["role"] == "assistant" else "user"
-            parts = []
-            
-            if msg.get("content"):
-                # Inject real-time search context to current prompt segment if applicable
-                text_content = msg["content"]
-                if msg == recent[-1] and role == "user" and context:
-                    text_content = user_input
-                parts.append(types.Part.from_text(text=text_content))
-            
-            if msg.get("file_uri"):
-                parts.append(types.Part(
-                    file_data=types.FileData(
-                        file_uri=msg.get("file_uri"),
-                        mime_type=msg.get("mime_type")
-                    )
-                ))
-            
-            if parts:
-                contents.append(types.Content(role=role, parts=parts))
+            # Build strictly verified Pydantic Content structures
+            contents = []
+            for msg in recent:
+                role = "model" if msg["role"] == "assistant" else "user"
+                parts = []
+                
+                if msg.get("content"):
+                    text_content = msg["content"]
+                    if msg == recent[-1] and role == "user" and context:
+                        text_content = user_input
+                    parts.append(types.Part.from_text(text=text_content))
+                
+                if msg.get("file_uri"):
+                    parts.append(types.Part(
+                        file_data=types.FileData(
+                            file_uri=msg.get("file_uri"),
+                            mime_type=msg.get("mime_type")
+                        )
+                    ))
+                
+                if parts:
+                    contents.append(types.Content(role=role, parts=parts))
 
-        # Generate output directly using native content array structures
-        config = types.GenerateContentConfig(
-            system_instruction=memory["system"]
-        )
-        response = ai_client.models.generate_content(
-            model=MODEL,
-            contents=contents,
-            config=config
-        )
-        reply = response.text.strip() if response.text else "Model returned an empty response."
+            # Send structures directly to generate content execution
+            config = types.GenerateContentConfig(
+                system_instruction=memory["system"]
+            )
+            response = ai_client.models.generate_content(
+                model=MODEL,
+                contents=contents,
+                config=config
+            )
+            reply = response.text.strip() if response.text else "Model returned an empty response."
 
-        # -------- SAVE RESPONSE -------- #
-        memory["messages"].append({
-            "role": "assistant",
-            "content": reply
-        })
+            # Append results to thread session storage
+            memory["messages"].append({
+                "role": "assistant",
+                "content": reply
+            })
 
-        memory["messages"] = memory["messages"][-MAX_MEMORY:]
-        save_memory(memory)
+            memory["messages"] = memory["messages"][-MAX_MEMORY:]
+            save_memory(memory)
 
-        return jsonify({"response": reply})
+            yield json.dumps({"response": reply})
 
-    except Exception as e:
-        print(f"Chat transaction failed: {e}")
-        # Convert exception cleanly to prevent syntax styling errors in highlighting
-        err_msg = repr(e)
-        return jsonify({"response": f"Chat processing error: {err_msg}"}), 500
+        except Exception as e:
+            print(f"Chat transaction failed: {e}")
+            err_msg = repr(e)
+            yield json.dumps({"response": f"Chat processing error: {err_msg}"})
+
+    # Wrapping via an open Response stream tricks cloud host proxies into keeping the channel open
+    return Response(generate_stream(), mimetype='application/json')
 
 
 if __name__ == "__main__":
