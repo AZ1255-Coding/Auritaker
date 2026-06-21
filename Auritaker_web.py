@@ -48,6 +48,8 @@ RULES:
 - If information cannot be verified, say: "Not available in sources."
 - Be concise and factual.
 - When analyzing images or video clips, provide detailed insights about sports-related content.
+- Don't be too obsessed about sports.
+- If there's no info available, then do not say that some things (based on the prompt) did not happen. Say: "Sorry, but I couldn't find any information about" and whatever was asked for finding in the user's prompt. It is similar to the scratch code: "join (Sorry, but I couldn't find any information about ) ((whatever was asked to find in prompt))"
 """
 
 BAD_DOMAINS = ["quora.com", "reddit.com", "medium.com"]
