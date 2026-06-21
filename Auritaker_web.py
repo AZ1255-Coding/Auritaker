@@ -2,8 +2,10 @@ from flask import Flask, render_template, request, jsonify, session, redirect, s
 from flask_cors import CORS
 from flask_session import Session  # Resolves the 4KB cookie overflow issue
 from tavily import TavilyClient
-import requests, os, json, re, base64
+import requests, os, json, re, base64, time
 from duckduckgo_search import DDGS
+from google import genai
+from werkzeug.utils import secure_filename
 
 # ---------------- APP SETUP ---------------- #
 
@@ -20,13 +22,16 @@ CORS(app, supports_credentials=True, origins=[
 ])
 
 MAX_MEMORY = 20
+UPLOAD_FOLDER = "/tmp"
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
 # ---------------- CONFIG ---------------- #
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
-# Keeping your exact choice here!
+# Initializing modern GenAI Client
+client = genai.Client(api_key=GEMINI_API_KEY)
 MODEL = "gemini-3.1-flash-lite"
 
 SYSTEM_ROLE = """
@@ -38,7 +43,7 @@ RULES:
 - Never fabricate specific facts.
 - If information cannot be verified, say: "Not available in sources."
 - Be concise and factual.
-- When analyzing images, provide detailed insights about sports-related content.
+- When analyzing images or videos, provide detailed insights about sports-related content.
 """
 
 BAD_DOMAINS = ["quora.com", "reddit.com", "medium.com"]
@@ -76,19 +81,16 @@ def clean_results(results):
 
 def web_search(query):
     try:
-        # DDGS() initiates a direct, anonymous connection to DuckDuckGo's live index
         with DDGS() as ddgs:
-            # Fetches top 5 live web results matching the query
             results = list(ddgs.text(query, max_results=5))
         
         cleaned_results = []
         for item in results:
             url_link = item.get("href", "")
-            # Filter out your bad domains list
             if not any(b in url_link for b in BAD_DOMAINS):
                 cleaned_results.append({
                     "title": item.get("title"),
-                    "snippet": item.get("body"),  # DDG's organic index page snippet
+                    "snippet": item.get("body"),
                     "url": url_link
                 })
 
@@ -112,85 +114,65 @@ def get_memory():
 
 def save_memory(memory):
     session["memory"] = memory
-    session.modified = True  # Explicitly tell Flask the session changed
+    session.modified = True
 
 
-# ---------------- IMAGE HANDLING ---------------- #
+# ---------------- FILE/IMAGE HANDLING ---------------- #
 
 def encode_image_to_base64(file_obj):
-    """Convert uploaded file to base64 string"""
     return base64.b64encode(file_obj.read()).decode('utf-8')
 
 
 def get_mime_type(filename):
-    """Get MIME type from filename"""
     ext = filename.lower().split('.')[-1]
     mime_types = {
         'jpg': 'image/jpeg',
         'jpeg': 'image/jpeg',
         'png': 'image/png',
         'gif': 'image/gif',
-        'webp': 'image/webp'
+        'webp': 'image/webp',
+        'mp4': 'video/mp4',
+        'webm': 'video/webm',
+        'mov': 'video/quicktime'
     }
     return mime_types.get(ext, 'image/jpeg')
 
 
-def parse_base64_data(data_url):
-    """Extract content type metadata and raw data values from base64 string"""
-    if not data_url or "," not in data_url:
-        return None, None
-    try:
-        header, base64_str = data_url.split(",", 1)
-        mime_match = re.search(r"data:(.*?);base64", header)
-        mime = mime_match.group(1) if mime_match else "image/jpeg"
-        return base64_str, mime
-    except Exception:
-        return None, None
+def is_video_file(filename):
+    ext = filename.lower().split('.')[-1]
+    return ext in ['mp4', 'webm', 'mov', 'avi', 'mkv', '3gp']
 
 
-# ---------------- GEMINI ---------------- #
+# ---------------- GEMINI CALL ENGINE ---------------- #
 
-def call_gemini(contents, system_instruction):
+def call_gemini_client(contents, system_instruction):
     if not GEMINI_API_KEY:
         return "Model error: Missing GEMINI_API_KEY"
-
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent?key={GEMINI_API_KEY}"
+        # Convert legacy parts-based dictionary structure back into the required prompt input format
+        formatted_contents = []
+        for item in contents:
+            role = item.get("role")
+            parts_list = []
+            for p in item.get("parts", []):
+                if "text" in p:
+                    parts_list.append(p["text"])
+                elif "inlineData" in p:
+                    # Append raw bytes directly using modern SDK structures
+                    parts_list.append({
+                        "inline_data": {
+                            "mime_type": p["inlineData"]["mimeType"],
+                            "data": base64.b64decode(p["inlineData"]["data"])
+                        }
+                    })
+            formatted_contents.append({"role": role, "parts": parts_list})
 
-        payload = {
-            "contents": contents,
-            "systemInstruction": {
-                "parts": [{"text": system_instruction}]
-            }
-        }
-
-        response = requests.post(
-            url,
-            headers={"Content-Type": "application/json"},
-            json=payload,
-            timeout=25
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=formatted_contents,
+            config={"system_instruction": system_instruction}
         )
-
-        if response.status_code != 200:
-            return f"HTTP {response.status_code}: {response.text}"
-
-        data = response.json()
-
-        if "error" in data:
-            return "Model error: " + data["error"].get("message", "Unknown error")
-
-        candidates = data.get("candidates", [])
-        if not candidates:
-            return "Model error: No candidates returned"
-
-        content = candidates[0].get("content", {})
-        parts = content.get("parts", [])
-
-        if not parts:
-            return "Model error: Empty response"
-
-        return parts[0].get("text", "").strip() or "Model error: empty text"
-
+        return response.text
     except Exception as e:
         return "Model error: " + str(e)
 
@@ -198,7 +180,6 @@ def call_gemini(contents, system_instruction):
 # ---------------- USER STORAGE ---------------- #
 
 USERS_FILE = "users.json"
-
 
 def load_users():
     if os.path.exists(USERS_FILE):
@@ -240,9 +221,7 @@ def login():
                 "messages": []
             }
             return redirect("/")
-
         return render_template("login.html", error="Invalid credentials")
-
     return render_template("login.html")
 
 
@@ -253,7 +232,6 @@ def signup():
         p = request.form.get("password", "")
 
         users = load_users()
-
         if u in users:
             return render_template("signup.html", error="User exists")
 
@@ -265,9 +243,7 @@ def signup():
             "system": SYSTEM_ROLE,
             "messages": []
         }
-
         return redirect("/")
-
     return render_template("signup.html")
 
 
@@ -277,40 +253,36 @@ def logout():
     return redirect("/login")
 
 
-# ---------------- CHAT (MULTIMODAL) ---------------- #
+# ---------------- CHAT ROUTE ---------------- #
 
 @app.route("/chat", methods=["POST"])
 def chat():
     if "user" not in session:
         return jsonify({"response": "Not logged in"}), 401
 
-    user_input = ""
+    user_input = request.form.get("message", "")
     image_data = None
     mime_type = None
+    video_path = None
+    uploaded_cloud_file = None
 
-    if request.is_json:
-        req_data = request.get_json(silent=True) or {}
-        user_input = req_data.get("message", "")
-        raw_image_url = req_data.get("image", None)
-        
-        if raw_image_url:
-            image_data, mime_type = parse_base64_data(raw_image_url)
-    else:
-        user_input = request.form.get("message", "")
+    # Handle file uploads if sent via multipart form data
+    if "file" in request.files:
+        uploaded_file = request.files["file"]
+        if uploaded_file and uploaded_file.filename != '':
+            filename = secure_filename(uploaded_file.filename)
+            mime_type = get_mime_type(filename)
 
-    if "image" in request.files:
-        image_file = request.files["image"]
-        if image_file and image_file.filename:
-            try:
-                image_data = encode_image_to_base64(image_file)
-                mime_type = get_mime_type(image_file.filename)
-                print(f"Image received via form: {image_file.filename} ({mime_type})")
-            except Exception as e:
-                print(f"Image processing error: {e}")
-                return jsonify({"response": f"Error processing image: {str(e)}"}), 400
+            if is_video_file(filename):
+                # Save locally to upload to the File API
+                video_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+                uploaded_file.save(video_path)
+            else:
+                # Handle standard inline images
+                image_data = encode_image_to_base64(uploaded_file)
 
-    if not user_input.strip() and not image_data:
-        return jsonify({"response": "Empty message and no image"}), 400
+    if not user_input.strip() and not image_data and not video_path:
+        return jsonify({"response": "Empty message and no media attached"}), 400
 
     memory = get_memory()
 
@@ -319,20 +291,19 @@ def chat():
     if user_input.strip() and should_search(user_input):
         context = web_search(user_input)
 
-    # -------- SAVE USER MESSAGE TO MEMORY -------- #
+    # -------- SAVE USER MESSAGE TO HISTORICAL MEMORY -------- #
     message_record = {
         "role": "user",
-        "content": user_input if user_input.strip() else "[Image shared]"
+        "content": user_input if user_input.strip() else "[Media attachment shared]"
     }
     if image_data:
         message_record["image_base64"] = image_data
         message_record["image_mime"] = mime_type
 
     memory["messages"].append(message_record)
-
     recent = memory["messages"][-10:]
 
-    # -------- BUILD GEMINI INPUT -------- #
+    # -------- BUILD CONTEXT STRUCTURES -------- #
     contents = []
     for msg in recent:
         role = "model" if msg["role"] == "assistant" else "user"
@@ -348,11 +319,10 @@ def chat():
                     "data": msg["image_base64"]
                 }
             })
-
         if parts:
             contents.append({"role": role, "parts": parts})
 
-    # -------- INJECT WEB SEARCH CONTEXT -------- #
+    # Inject search context text directly into current prompt part
     if context and contents and contents[-1]["role"] == "user":
         context_text = f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
         if contents[-1]["parts"] and "text" in contents[-1]["parts"][0]:
@@ -360,8 +330,67 @@ def chat():
         else:
             contents[-1]["parts"].insert(0, {"text": context_text})
 
-    # -------- CALL GEMINI -------- #
-    reply = call_gemini(contents, memory["system"])
+    try:
+        # Handle video integration using the cloud file pipeline if tracking video_path
+        if video_path:
+            print(f"Staging {video_path} into Gemini File API...")
+            uploaded_cloud_file = client.files.upload(file=video_path)
+            
+            # Pool loop waiting for frames extraction processing
+            while uploaded_cloud_file.state.name == "PROCESSING":
+                print("Waiting for cloud file parsing processing...")
+                time.sleep(3)
+                uploaded_cloud_file = client.files.get(name=uploaded_cloud_file.name)
+                
+            if uploaded_cloud_file.state.name == "FAILED":
+                raise Exception("Google cloud processing failed.")
+
+            # Append the structured cloud handle straight into the prompt sequence
+            # Reconstruct elements matching call parameters requirements
+            formatted_contents = []
+            for item in contents:
+                role = item.get("role")
+                parts_list = []
+                for p in item.get("parts", []):
+                    if "text" in p:
+                        parts_list.append(p["text"])
+                    elif "inlineData" in p:
+                        parts_list.append({
+                            "inline_data": {
+                                "mime_type": p["inlineData"]["mimeType"],
+                                "data": base64.b64decode(p["inlineData"]["data"])
+                            }
+                        })
+                formatted_contents.append({"role": role, "parts": parts_list})
+
+            # Inject the loaded reference handle into the final text sequence array position
+            if formatted_contents:
+                formatted_contents[-1]["parts"].insert(0, uploaded_cloud_file)
+
+            response = client.models.generate_content(
+                model=MODEL,
+                contents=formatted_contents,
+                config={"system_instruction": memory["system"]}
+            )
+            reply = response.text
+        else:
+            # Standard text and image generation
+            reply = call_gemini_client(contents, memory["system"])
+
+    except Exception as e:
+        print(f"Error during execution pipeline: {e}")
+        reply = f"An error occurred processing the request: {str(e)}"
+    finally:
+        # Cleanup routine tracking local block references and file indices copies
+        if uploaded_cloud_file:
+            try:
+                client.files.delete(name=uploaded_cloud_file.name)
+                print("Cleaned up cloud asset data.")
+            except Exception as ce:
+                print(f"Cloud file cleanup exception: {ce}")
+        if video_path and os.path.exists(video_path):
+            os.remove(video_path)
+            print("Cleaned up local temporary video file storage copy.")
 
     # -------- SAVE RESPONSE -------- #
     memory["messages"].append({
