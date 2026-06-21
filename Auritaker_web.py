@@ -172,7 +172,7 @@ def logout():
     return redirect("/login")
 
 
-# ---------------- CHAT (MULTIMODAL VIA SDK) ---------------- #
+# ---------------- CHAT (MULTIMODAL VIA OFFICIAL SDK CHAT MANAGER) ---------------- #
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -182,47 +182,15 @@ def chat():
         return jsonify({"response": "Model error: GEMINI_API_KEY missing on server"}), 500
 
     user_input = request.form.get("message", "")
-    file_uri = None
-    mime_type = None
+    uploaded_file_obj = None
 
-    # Handle file uploads using the official file API manager
+    # 1. Grab file from incoming request safely matching your HTML field ('file')
     if "file" in request.files:
-        uploaded_file = request.files["file"]
-        if uploaded_file and uploaded_file.filename:
-            try:
-                # Save temporarily to let the SDK access the stream cleanly
-                temp_dir = "/tmp" if os.name != "nt" else "."
-                os.makedirs(temp_dir, exist_ok=True)
-                temp_path = os.path.join(temp_dir, uploaded_file.filename)
-                uploaded_file.save(temp_path)
-                
-                # --- CRITICAL FIX 2: Stream upload and await asynchronous backend processing ---
-                print("Uploading file to Gemini File API...")
-                gemini_file = ai_client.files.upload(file=temp_path)
-                
-                if "video" in gemini_file.mime_type.lower():
-                    print(f"Video detected ({uploaded_file.filename}). Waiting for processing...")
-                    attempts = 0
-                    while gemini_file.state.name == "PROCESSING" and attempts < 40:
-                        time.sleep(3)
-                        gemini_file = ai_client.files.get(name=gemini_file.name)
-                        attempts += 1
-                        print(f"Processing state: {gemini_file.state.name} (Loop {attempts})")
-                    
-                    if gemini_file.state.name != "ACTIVE":
-                        raise ValueError(f"Video processing failed or timed out. State: {gemini_file.state.name}")
-                
-                file_uri = gemini_file.uri
-                mime_type = gemini_file.mime_type
-                
-                # Clean up local file copy
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-            except Exception as e:
-                print(f"File upload/processing failed via SDK: {e}")
-                return jsonify({"response": f"File handling error: {str(e)}"}), 500
+        f = request.files["file"]
+        if f and f.filename:
+            uploaded_file_obj = f
 
-    if not user_input.strip() and not file_uri:
+    if not user_input.strip() and not uploaded_file_obj:
         return jsonify({"response": "Empty message and no attachment"}), 400
 
     memory = get_memory()
@@ -231,38 +199,107 @@ def chat():
     context = None
     if user_input.strip() and should_search(user_input):
         context = web_search(user_input)
+    if context:
+        user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
 
-    # -------- SAVE USER MESSAGE TO MEMORY -------- #
-    message_record = {
-        "role": "user",
-        "content": user_input if user_input.strip() else "[Media attachment shared]"
-    }
-    if file_uri:
-        message_record["file_uri"] = file_uri
-        message_record["mime_type"] = mime_type
+    # -------- PROCESS CHAT AND MEDIA VIA SDK -------- #
+    try:
+        # Reconstruct the strict SDK history from our session storage
+        sdk_history = []
+        for msg in memory["messages"]:
+            role = "model" if msg["role"] == "assistant" else "user"
+            parts = []
+            
+            if msg.get("content"):
+                parts.append(types.Part.from_text(text=msg["content"]))
+            
+            if msg.get("file_uri"):
+                parts.append(types.Part(
+                    file_data=types.FileData(
+                        file_uri=msg.get("file_uri"),
+                        mime_type=msg.get("mime_type")
+                    )
+                ))
+            
+            if parts:
+                sdk_history.append(types.Content(role=role, parts=parts))
 
-    memory["messages"].append(message_record)
-    recent = memory["messages"][-10:]
+        # Initialize the official SDK chat session with historical messages
+        chat_session = ai_client.chats.create(
+            model=MODEL,
+            history=sdk_history,
+            config=types.GenerateContentConfig(
+                system_instruction=memory["system"]
+            )
+        )
 
-    # -------- BUILD CONTENT OBJECTS FOR SDK -------- #
-    contents = []
-    for msg in recent:
-        role = "model" if msg["role"] == "assistant" else "user"
-        parts = []
+        # Build current payload parts
+        current_message_parts = []
+        file_uri_to_store = None
+        mime_type_to_store = None
 
-        if msg.get("content"):
-            parts.append(types.Part.from_text(text=msg["content"]))
+        if uploaded_file_obj:
+            # Save file temporarily on local disk
+            temp_dir = "/tmp" if os.name != "nt" else "."
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
+            uploaded_file_obj.save(temp_path)
+            
+            print(f"Uploading {uploaded_file_obj.filename} to Gemini File API...")
+            gemini_file = ai_client.files.upload(file=temp_path)
+            
+            # Await processing state loop if video detected
+            if "video" in gemini_file.mime_type.lower():
+                print("Video detected. Waiting for Gemini backend processing...")
+                attempts = 0
+                while gemini_file.state.name == "PROCESSING" and attempts < 40:
+                    time.sleep(3)
+                    gemini_file = ai_client.files.get(name=gemini_file.name)
+                    attempts += 1
+                    print(f"Processing state: {gemini_file.state.name} (Loop {attempts})")
+                
+                if gemini_file.state.name != "ACTIVE":
+                    raise ValueError(f"Video file processing failed or timed out. State: {gemini_file.state.name}")
 
-        if msg.get("file_uri"):
-            parts.append(types.Part(
-                file_data=types.FileData(
-                    file_uri=msg.get("file_uri"),
-                    mime_type=msg.get("mime_type")
-                )
-            ))
+            # Append the completed file reference directly to current message targets
+            current_message_parts.append(gemini_file)
+            file_uri_to_store = gemini_file.uri
+            mime_type_to_store = gemini_file.mime_type
 
-        if parts:
-            contents.append(types.Content(role=role, parts=parts))
+            # Clean up disk copy
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+        if user_input.strip():
+            current_message_parts.append(user_input)
+
+        # Send the multi-modal parts directly through the active session wrapper
+        response = chat_session.send_message(current_message_parts)
+        reply = response.text.strip() if response.text else "Model returned an empty response."
+
+        # -------- UPDATE HISTORY STORAGE -------- #
+        user_record = {
+            "role": "user",
+            "content": request.form.get("message", "") if request.form.get("message", "").strip() else "[Media attachment shared]"
+        }
+        if file_uri_to_store:
+            user_record["file_uri"] = file_uri_to_store
+            user_record["mime_type"] = mime_type_to_store
+
+        memory["messages"].append(user_record)
+        memory["messages"].append({
+            "role": "assistant",
+            "content": reply
+        })
+
+        memory["messages"] = memory["messages"][-MAX_MEMORY:]
+        save_memory(memory)
+
+        return jsonify({"response": reply})
+
+    except Exception as e:
+        print(f"Chat transaction failed: {e}")
+        return jsonify({"response": f"Chat processing error: {str(e)}"}), 500
 
     # -------- INJECT WEB SEARCH CONTEXT -------- #
     if context and contents and contents[-1].role == "user":
