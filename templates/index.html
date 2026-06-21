@@ -732,14 +732,31 @@
             }
 
             try {
+                // Modified to handle the chunk stream from backend to bypass proxy cutoffs
                 const res = await fetch(BACKEND_URL + '/chat', {
                     method: 'POST',
                     body: formData,
                     credentials: 'include'
                 });
-                const json = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(`Server returned status code: ${res.status}`);
+                }
+
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let accumulatedData = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    accumulatedData += decoder.decode(value, { stream: true });
+                }
+
                 removeTyping();
-                if (res.ok && json.response) {
+                const json = JSON.parse(accumulatedData);
+
+                if (json.response) {
                     appendMessage('assistant', json.response);
                     const d = getData();
                     const c = d.chats.find(x => x.id === currentChatId);
@@ -747,7 +764,7 @@
                     document.getElementById('current-chat-title').textContent = chat.title;
                     renderSidebar();
                 } else {
-                    appendMessage('assistant', '❌ ' + (json.response || 'Something went wrong'));
+                    appendMessage('assistant', '❌ Something went wrong processing the payload.');
                 }
             } catch (err) {
                 removeTyping();
