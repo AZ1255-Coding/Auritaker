@@ -112,8 +112,7 @@
         .message.user .msg-bubble { background: var(--user-bg); border: 1px solid rgba(79,142,255,0.15); color: #c8d8f5; border-radius: 14px 4px 14px 14px; }
         .message.ai .msg-bubble { background: var(--ai-bg); border: 1px solid var(--border); color: var(--text); border-radius: 4px 14px 14px 14px; }
         
-        /* Embedded Image Rendering Style */
-        .msg-attached-img { max-width: 100%; max-height: 250px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); margin-top: 8px; display: block; object-fit: contain; }
+        .msg-attached-img, .msg-attached-vid { max-width: 100%; max-height: 250px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); margin-top: 8px; display: block; object-fit: contain; }
         
         .typing-dots { display: flex; gap: 5px; padding: 4px 0; align-items: center; }
         .typing-dots span { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; opacity: 0.4; animation: dot 1.4s ease-in-out infinite; }
@@ -123,19 +122,16 @@
         .input-area { padding: 14px 20px 18px; flex-shrink: 0; }
         .input-wrap { max-width: 720px; margin: 0 auto; position: relative; }
         
-        /* Preserved exact layouts with added inside upload button alignment and layout styling */
         .input-box { display: flex; align-items: flex-end; gap: 10px; background: var(--surface); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 9px 9px 9px 14px; transition: border-color 0.2s, box-shadow 0.2s; position: relative; }
         .input-box:focus-within { border-color: rgba(79,142,255,0.4); box-shadow: 0 0 0 3px rgba(79,142,255,0.07); }
         #user-input { flex: 1; background: none; border: none; outline: none; color: var(--text); font-size: 14px; font-family: 'DM Sans', sans-serif; resize: none; max-height: 160px; min-height: 24px; line-height: 1.5; padding: 3px 0; }
         #user-input::placeholder { color: #2d3d5a; }
         
-        /* Seamless image upload trigger button style matching input context */
         .img-upload-btn { background: none; border: none; color: var(--muted); cursor: pointer; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: color 0.15s; margin-bottom: 3px; flex-shrink: 0; }
         .img-upload-btn:hover { color: var(--text); }
         
-        /* Floating mini UI element container layout for local live view validation */
         .inline-img-preview { display: none; position: absolute; top: -56px; left: 14px; background: #0e1828; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 4px; z-index: 20; height: 46px; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-        .inline-img-preview img { height: 100%; width: 36px; object-fit: cover; border-radius: 4px; }
+        .inline-img-preview img, .inline-img-preview video { height: 100%; width: 36px; object-fit: cover; border-radius: 4px; }
         .inline-img-preview button { background: none; border: none; color: var(--danger); cursor: pointer; padding: 0 6px; font-size: 11px; }
 
         #send-btn { width: 36px; height: 36px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border: none; border-radius: 9px; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; transition: all 0.2s; box-shadow: 0 4px 12px rgba(79,142,255,0.3); }
@@ -259,12 +255,12 @@
         <div class="input-area">
             <div class="input-wrap">
                 <div class="inline-img-preview" id="img-preview-box">
-                    <img src="" id="img-preview-el">
+                    <div id="preview-media-container"></div>
                     <button onclick="removeSelectedImage()"><i class="fas fa-times"></i></button>
                 </div>
                 <div class="input-box">
-                    <input type="file" id="hidden-file-input" accept="image/*" style="display:none;" onchange="imageSelected(this)">
-                    <button class="img-upload-btn" onclick="document.getElementById('hidden-file-input').click()" title="Upload Image"><i class="fas fa-image"></i></button>
+                    <input type="file" id="hidden-file-input" accept="image/*,video/mp4,video/webm,video/quicktime" style="display:none;" onchange="imageSelected(this)">
+                    <button class="img-upload-btn" onclick="document.getElementById('hidden-file-input').click()" title="Upload Media"><i class="fas fa-paperclip"></i></button>
                     <textarea id="user-input" placeholder="Ask anything..." rows="1" autocomplete="off"></textarea>
                     <button id="send-btn" onclick="sendMessage()"><i class="fas fa-arrow-up"></i></button>
                 </div>
@@ -280,7 +276,9 @@
         let isLoading = false;
         let ctxTarget = null;
         let pendingAction = null;
-        let currentBase64Image = null;
+        let selectedFileBlob = null;
+        let selectedFileBase64 = null;
+        let isVideoSelected = false;
 
         function getData() {
             return {
@@ -324,23 +322,42 @@
             sendMessage();
         }
 
-        // ── Image State Processing ──
+        // ── Media State Processing ──
         function imageSelected(input) {
             const file = input.files[0];
             if (!file) return;
+            selectedFileBlob = file;
+            isVideoSelected = file.type.startsWith('video/');
+
             const reader = new FileReader();
             reader.onload = function(e) {
-                currentBase64Image = e.target.result;
-                document.getElementById('img-preview-el').src = currentBase64Image;
+                selectedFileBase64 = e.target.result;
+                const container = document.getElementById('preview-media-container');
+                container.innerHTML = '';
+                
+                if (isVideoSelected) {
+                    const videoEl = document.createElement('video');
+                    videoEl.src = selectedFileBase64;
+                    videoEl.muted = true;
+                    videoEl.playsInline = true;
+                    container.appendChild(videoEl);
+                } else {
+                    const imgEl = document.createElement('img');
+                    imgEl.src = selectedFileBase64;
+                    container.appendChild(imgEl);
+                }
                 document.getElementById('img-preview-box').style.display = 'flex';
             };
             reader.readAsDataURL(file);
         }
 
         function removeSelectedImage() {
-            currentBase64Image = null;
+            selectedFileBlob = null;
+            selectedFileBase64 = null;
+            isVideoSelected = false;
             document.getElementById('hidden-file-input').value = '';
             document.getElementById('img-preview-box').style.display = 'none';
+            document.getElementById('preview-media-container').innerHTML = '';
         }
 
         // ── Sidebar ──
@@ -616,13 +633,13 @@
             document.getElementById('current-chat-title').textContent = chat.title;
             const inner = document.getElementById('chat-inner');
             inner.innerHTML = '';
-            chat.messages.forEach(m => appendMessage(m.role, m.text, m.image));
+            chat.messages.forEach(m => appendMessage(m.role, m.text, m.image, m.isVideo));
             removeSelectedImage();
             renderSidebar();
         }
 
         // ── Messages ──
-        function appendMessage(role, text, imageSrc = null) {
+        function appendMessage(role, text, mediaSrc = null, isVid = false) {
             const welcome = document.getElementById('welcome-screen');
             if (welcome) welcome.remove();
             const inner = document.getElementById('chat-inner');
@@ -638,12 +655,16 @@
                 .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
                 .replace(/\n/g,'<br>');
 
-            let imageHTML = '';
-            if (imageSrc) {
-                imageHTML = `<img src="${imageSrc}" class="msg-attached-img" alt="Uploaded Attachment">`;
+            let mediaHTML = '';
+            if (mediaSrc) {
+                if (isVid) {
+                    mediaHTML = `<video src="${mediaSrc}" class="msg-attached-vid" controls style="max-width:100%; max-height:250px; border-radius:8px; margin-top:8px; display:block;"></video>`;
+                } else {
+                    mediaHTML = `<img src="${mediaSrc}" class="msg-attached-img" alt="Uploaded Attachment">`;
+                }
             }
 
-            wrap.innerHTML = `${avatarHTML}<div class="msg-bubble">${formatted}${imageHTML}</div>`;
+            wrap.innerHTML = `${avatarHTML}<div class="msg-bubble">${formatted}${mediaHTML}</div>`;
             inner.appendChild(wrap);
             document.getElementById('chat-box').scrollTop = 99999;
         }
@@ -676,20 +697,22 @@
         async function sendMessage() {
             if (isLoading) return;
             const text = textarea.value.trim();
-            const attachedImage = currentBase64Image;
+            const attachedFile = selectedFileBlob;
+            const attachedMediaSrc = selectedFileBase64;
+            const currentVidState = isVideoSelected;
 
-            if (!text && !attachedImage) return;
+            if (!text && !attachedFile) return;
             if (!currentChatId) currentChatId = Date.now();
             
-            appendMessage('user', text, attachedImage);
+            appendMessage('user', text, attachedMediaSrc, currentVidState);
             
             const data = getData();
             let chat = data.chats.find(c => c.id === currentChatId);
             if (!chat) {
-                chat = { id: currentChatId, title: text ? text.substring(0, 32) : "Image Reference", messages: [], projectId: null };
+                chat = { id: currentChatId, title: text ? text.substring(0, 32) : "Media Reference", messages: [], projectId: null };
                 data.chats.push(chat);
             }
-            chat.messages.push({ role: 'user', text, image: attachedImage });
+            chat.messages.push({ role: 'user', text, image: attachedMediaSrc, isVideo: currentVidState });
             saveData(data);
             
             textarea.value = '';
@@ -700,14 +723,18 @@
             isLoading = true;
             document.getElementById('send-btn').disabled = true;
             showTyping();
+
+            // Construct multipart form data object
+            const formData = new FormData();
+            formData.append("message", text);
+            if (attachedFile) {
+                formData.append("file", attachedFile);
+            }
+
             try {
                 const res = await fetch(BACKEND_URL + '/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        message: text,
-                        image: attachedImage 
-                    }),
+                    body: formData,
                     credentials: 'include'
                 });
                 const json = await res.json();
