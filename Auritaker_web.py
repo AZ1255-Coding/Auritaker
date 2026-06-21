@@ -182,7 +182,9 @@ def chat():
     if not ai_client:
         return jsonify({"response": "Model error: GEMINI_API_KEY missing on server"}), 500
 
-    user_input = request.form.get("message", "")
+    # ✅ Extract request form details immediately before entering the generator scope
+    raw_message = request.form.get("message", "")
+    user_input = raw_message
     uploaded_file_obj = None
 
     # Access file mapping from frontend JS FormData key name 'file'
@@ -204,7 +206,8 @@ def chat():
         user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
 
     def generate_stream():
-        nonlocal user_input, uploaded_file_obj, memory
+        # ✅ Include raw_message via nonlocal to completely bypass the context crash
+        nonlocal user_input, uploaded_file_obj, memory, raw_message
         try:
             file_uri_to_store = None
             mime_type_to_store = None
@@ -240,9 +243,10 @@ def chat():
                     os.remove(temp_path)
 
             # -------- UPDATE HISTORY STORAGE -------- #
+            # ✅ Swapped out request.form.get with pre-captured raw_message
             user_record = {
                 "role": "user",
-                "content": request.form.get("message", "") if request.form.get("message", "").strip() else "[Media attachment shared]"
+                "content": raw_message if raw_message.strip() else "[Media attachment shared]"
             }
             if file_uri_to_store:
                 user_record["file_uri"] = file_uri_to_store
