@@ -4,7 +4,7 @@ from flask_session import Session  # Resolves the 4KB cookie overflow issue
 from tavily import TavilyClient
 import os, json, re, time
 from duckduckgo_search import DDGS
-# Import the official new Google GenAI SDK
+# Import the official modern Google GenAI SDK
 from google import genai
 from google.genai import types
 
@@ -13,7 +13,7 @@ from google.genai import types
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "auritaker_secret")
 
-# --- CRITICAL FIX 1: Allow large files up to 500 Megabytes ---
+# Allow larger file payloads (up to 500 Megabytes) for videos
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 
 # Configure Server-Side Sessions
@@ -172,7 +172,7 @@ def logout():
     return redirect("/login")
 
 
-# ---------------- CHAT (MULTIMODAL VIA OFFICIAL SDK CHAT MANAGER) ---------------- #
+# ---------------- CHAT (MULTIMODAL VIA SDK GENERATION) ---------------- #
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -184,7 +184,7 @@ def chat():
     user_input = request.form.get("message", "")
     uploaded_file_obj = None
 
-    # 1. Grab file from incoming request safely matching your HTML field ('file')
+    # Link with the matching form field name 'file' coming from frontend JS
     if "file" in request.files:
         f = request.files["file"]
         if f and f.filename:
@@ -204,37 +204,6 @@ def chat():
 
     # -------- PROCESS CHAT AND MEDIA VIA SDK -------- #
     try:
-        # Reconstruct the strict SDK history from our session storage
-        sdk_history = []
-        for msg in memory["messages"]:
-            role = "model" if msg["role"] == "assistant" else "user"
-            parts = []
-            
-            if msg.get("content"):
-                parts.append(types.Part.from_text(text=msg["content"]))
-            
-            if msg.get("file_uri"):
-                parts.append(types.Part(
-                    file_data=types.FileData(
-                        file_uri=msg.get("file_uri"),
-                        mime_type=msg.get("mime_type")
-                    )
-                ))
-            
-            if parts:
-                sdk_history.append(types.Content(role=role, parts=parts))
-
-        # Initialize the official SDK chat session with historical messages
-        chat_session = ai_client.chats.create(
-            model=MODEL,
-            history=sdk_history,
-            config=types.GenerateContentConfig(
-                system_instruction=memory["system"]
-            )
-        )
-
-        # Build current payload parts
-        current_message_parts = []
         file_uri_to_store = None
         mime_type_to_store = None
 
@@ -248,12 +217,12 @@ def chat():
             print(f"Uploading {uploaded_file_obj.filename} to Gemini File API...")
             gemini_file = ai_client.files.upload(file=temp_path)
             
-            # Await processing state loop if video detected
+            # Watch asynchronous processing loop if a video file is detected
             if "video" in gemini_file.mime_type.lower():
-                print("Video detected. Waiting for Gemini backend processing...")
+                print("Video file detected. Waiting for Gemini backend processing...")
                 attempts = 0
-                while gemini_file.state.name == "PROCESSING" and attempts < 40:
-                    time.sleep(3)
+                while gemini_file.state.name == "PROCESSING" and attempts < 30:
+                    time.sleep(2)
                     gemini_file = ai_client.files.get(name=gemini_file.name)
                     attempts += 1
                     print(f"Processing state: {gemini_file.state.name} (Loop {attempts})")
@@ -261,21 +230,13 @@ def chat():
                 if gemini_file.state.name != "ACTIVE":
                     raise ValueError(f"Video file processing failed or timed out. State: {gemini_file.state.name}")
 
-            # Append the completed file reference directly to current message targets
-            current_message_parts.append(gemini_file)
+            # Extract the completed cloud parameters
             file_uri_to_store = gemini_file.uri
             mime_type_to_store = gemini_file.mime_type
 
-            # Clean up disk copy
+            # Clean up local disk copy
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-
-        if user_input.strip():
-            current_message_parts.append(user_input)
-
-        # Send the multi-modal parts directly through the active session wrapper
-        response = chat_session.send_message(current_message_parts)
-        reply = response.text.strip() if response.text else "Model returned an empty response."
 
         # -------- UPDATE HISTORY STORAGE -------- #
         user_record = {
@@ -287,6 +248,44 @@ def chat():
             user_record["mime_type"] = mime_type_to_store
 
         memory["messages"].append(user_record)
+        recent = memory["messages"][-10:]
+
+        # Reconstruct the strict SDK history objects from session storage
+        contents = []
+        for msg in recent:
+            role = "model" if msg["role"] == "assistant" else "user"
+            parts = []
+            
+            if msg.get("content"):
+                # Inject real-time search context to current prompt segment if applicable
+                text_content = msg["content"]
+                if msg == recent[-1] and role == "user" and context:
+                    text_content = user_input
+                parts.append(types.Part.from_text(text=text_content))
+            
+            if msg.get("file_uri"):
+                parts.append(types.Part(
+                    file_data=types.FileData(
+                        file_uri=msg.get("file_uri"),
+                        mime_type=msg.get("mime_type")
+                    )
+                ))
+            
+            if parts:
+                contents.append(types.Content(role=role, parts=parts))
+
+        # Generate output directly using native content array structures
+        config = types.GenerateContentConfig(
+            system_instruction=memory["system"]
+        )
+        response = ai_client.models.generate_content(
+            model=MODEL,
+            contents=contents,
+            config=config
+        )
+        reply = response.text.strip() if response.text else "Model returned an empty response."
+
+        # -------- SAVE RESPONSE -------- #
         memory["messages"].append({
             "role": "assistant",
             "content": reply
@@ -299,38 +298,9 @@ def chat():
 
     except Exception as e:
         print(f"Chat transaction failed: {e}")
-        return jsonify({"response": f"Chat processing error: {str(e)}"}), 500
-
-    # -------- INJECT WEB SEARCH CONTEXT -------- #
-    if context and contents and contents[-1].role == "user":
-        context_text = f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
-        if contents[-1].parts and hasattr(contents[-1].parts[0], 'text'):
-            contents[-1].parts[0].text += context_text
-
-    # -------- GENERATE ANSWER VIA GOOGLE-GENAI SDK -------- #
-    try:
-        config = types.GenerateContentConfig(
-            system_instruction=memory["system"]
-        )
-        response = ai_client.models.generate_content(
-            model=MODEL,
-            contents=contents,
-            config=config
-        )
-        reply = response.text.strip() if response.text else "Model returned an empty response."
-    except Exception as e:
-        reply = f"Model error: {e}"
-
-    # -------- SAVE RESPONSE & UPDATE CONFIG -------- #
-    memory["messages"].append({
-        "role": "assistant",
-        "content": reply
-    })
-
-    memory["messages"] = memory["messages"][-MAX_MEMORY:]
-    save_memory(memory)
-
-    return jsonify({"response": reply})
+        # Convert exception cleanly to prevent syntax styling errors in highlighting
+        err_msg = repr(e)
+        return jsonify({"response": f"Chat processing error: {err_msg}"}), 500
 
 
 if __name__ == "__main__":
