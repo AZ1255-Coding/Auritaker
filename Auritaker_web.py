@@ -3,7 +3,8 @@ from flask_cors import CORS
 from flask_session import Session  # Resolves 4KB client cookie overflow issue
 from tavily import TavilyClient
 import os, json, re, time
-from duckduckgo_search import DDGS
+# Using the updated standalone package module
+from ddgs import DDGS
 # Import the official modern Google GenAI SDK
 from google import genai
 from google.genai import types
@@ -22,7 +23,7 @@ app.config["SESSION_PERMANENT"] = False
 Session(app)
 
 CORS(app, supports_credentials=True, origins=[
-    "https://az1255-coding.github.io"
+    "https://github.io"
 ])
 
 MAX_MEMORY = 20
@@ -78,16 +79,17 @@ def should_search(text: str) -> bool:
 
 def web_search(query):
     try:
+        # Restored context manager with correct keys
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=5))
         
         cleaned_results = []
         for item in results:
-            url_link = item.get("href", "")
+            url_link = item.get("url", "")
             if not any(b in url_link for b in BAD_DOMAINS):
                 cleaned_results.append({
                     "title": item.get("title"),
-                    "snippet": item.get("body"),
+                    "snippet": item.get("snippet") or item.get("body"),
                     "url": url_link
                 })
         return {"query": query, "results": cleaned_results}
@@ -184,7 +186,7 @@ def chat():
     if not ai_client:
         return jsonify({"response": "Model error: GEMINI_API_KEY missing on server"}), 500
 
-    # ✅ Extract request form details immediately before entering the generator scope
+    # Extract request form details immediately before entering the generator scope
     raw_message = request.form.get("message", "")
     user_input = raw_message
     uploaded_file_obj = None
@@ -208,7 +210,6 @@ def chat():
         user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
 
     def generate_stream():
-        # ✅ Include raw_message via nonlocal to completely bypass the context crash
         nonlocal user_input, uploaded_file_obj, memory, raw_message
         try:
             file_uri_to_store = None
@@ -245,7 +246,6 @@ def chat():
                     os.remove(temp_path)
 
             # -------- UPDATE HISTORY STORAGE -------- #
-            # ✅ Swapped out request.form.get with pre-captured raw_message
             user_record = {
                 "role": "user",
                 "content": raw_message if raw_message.strip() else "[Media attachment shared]"
