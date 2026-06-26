@@ -277,7 +277,7 @@ def chat():
     # Save initial user records to session before the request lifecycle terminates
     save_memory(memory)
 
-            def generate_stream():
+    def generate_stream():
         # Isolated generator does not read or save to Flask session globals
         try:
             config = types.GenerateContentConfig(
