@@ -79,7 +79,6 @@ def should_search(text: str) -> bool:
 
 def web_search(query):
     try:
-        # Restored context manager with correct keys
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=5))
         
@@ -186,12 +185,10 @@ def chat():
     if not ai_client:
         return jsonify({"response": "Model error: GEMINI_API_KEY missing on server"}), 500
 
-    # Extract request form details immediately before entering the generator scope
     raw_message = request.form.get("message", "")
     user_input = raw_message
     uploaded_file_obj = None
 
-    # Access file mapping from frontend JS FormData key name 'file'
     if "file" in request.files:
         f = request.files["file"]
         if f and f.filename:
@@ -200,6 +197,7 @@ def chat():
     if not user_input.strip() and not uploaded_file_obj:
         return jsonify({"response": "Empty message and no attachment"}), 400
 
+    # Read from session safely while still inside the active route request context
     memory = get_memory()
 
     # -------- WEB SEARCH -------- #
@@ -209,78 +207,79 @@ def chat():
     if context:
         user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
 
-    def generate_stream():
-        nonlocal user_input, uploaded_file_obj, memory, raw_message
+    file_uri_to_store = None
+    mime_type_to_store = None
+
+    # Handle file operations upfront inside the request context boundaries
+    if uploaded_file_obj:
+        temp_dir = os.path.join(os.getcwd(), "temp_uploads")
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
+        uploaded_file_obj.save(temp_path)
+        
         try:
-            file_uri_to_store = None
-            mime_type_to_store = None
-
-            if uploaded_file_obj:
-                # Save file securely inside an application-owned relative directory path
-                temp_dir = os.path.join(os.getcwd(), "temp_uploads")
-                os.makedirs(temp_dir, exist_ok=True)
-                temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
-                uploaded_file_obj.save(temp_path)
+            print(f"Uploading {uploaded_file_obj.filename} to Gemini File API...")
+            gemini_file = ai_client.files.upload(file=temp_path)
+            
+            if "video" in gemini_file.mime_type.lower():
+                print("Video file detected. Waiting for Gemini backend processing...")
+                attempts = 0
+                while gemini_file.state.name == "PROCESSING" and attempts < 40:
+                    time.sleep(2)
+                    gemini_file = ai_client.files.get(name=gemini_file.name)
+                    attempts += 1
+                    print(f"Processing state: {gemini_file.state.name} (Loop {attempts})")
                 
-                print(f"Uploading {uploaded_file_obj.filename} to Gemini File API...")
-                gemini_file = ai_client.files.upload(file=temp_path)
-                
-                # Asynchronous pooling loop with Keep-Alive stream pulses for proxies
-                if "video" in gemini_file.mime_type.lower():
-                    print("Video file detected. Waiting for Gemini backend processing...")
-                    attempts = 0
-                    while gemini_file.state.name == "PROCESSING" and attempts < 40:
-                        time.sleep(2)
-                        gemini_file = ai_client.files.get(name=gemini_file.name)
-                        attempts += 1
-                        print(f"Processing state: {gemini_file.state.name} (Loop {attempts})")
-                    
-                    if gemini_file.state.name != "ACTIVE":
-                        raise ValueError(f"Video file processing failed or timed out. State: {gemini_file.state.name}")
+                if gemini_file.state.name != "ACTIVE":
+                    raise ValueError(f"Video file processing failed. State: {gemini_file.state.name}")
 
-                file_uri_to_store = gemini_file.uri
-                mime_type_to_store = gemini_file.mime_type
+            file_uri_to_store = gemini_file.uri
+            mime_type_to_store = gemini_file.mime_type
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
-                # Clean up local disk cache space
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
+    # Pre-append the user's incoming payload to our memory clone
+    user_record = {
+        "role": "user",
+        "content": raw_message if raw_message.strip() else "[Media attachment shared]"
+    }
+    if file_uri_to_store:
+        user_record["file_uri"] = file_uri_to_store
+        user_record["mime_type"] = mime_type_to_store
 
-            # -------- UPDATE HISTORY STORAGE -------- #
-            user_record = {
-                "role": "user",
-                "content": raw_message if raw_message.strip() else "[Media attachment shared]"
-            }
-            if file_uri_to_store:
-                user_record["file_uri"] = file_uri_to_store
-                user_record["mime_type"] = mime_type_to_store
+    memory["messages"].append(user_record)
+    recent = memory["messages"][-10:]
 
-            memory["messages"].append(user_record)
-            recent = memory["messages"][-10:]
+    # Build Pydantic Content parameters before yielding execution
+    contents = []
+    for msg in recent:
+        role = "model" if msg["role"] == "assistant" else "user"
+        parts = []
+        
+        if msg.get("content"):
+            text_content = msg["content"]
+            if msg == recent[-1] and role == "user" and context:
+                text_content = user_input
+            parts.append(types.Part.from_text(text=text_content))
+        
+        if msg.get("file_uri"):
+            parts.append(types.Part(
+                file_data=types.FileData(
+                    file_uri=msg.get("file_uri"),
+                    mime_type=msg.get("mime_type")
+                )
+            ))
+        
+        if parts:
+            contents.append(types.Content(role=role, parts=parts))
 
-            # Build strictly verified Pydantic Content structures
-            contents = []
-            for msg in recent:
-                role = "model" if msg["role"] == "assistant" else "user"
-                parts = []
-                
-                if msg.get("content"):
-                    text_content = msg["content"]
-                    if msg == recent[-1] and role == "user" and context:
-                        text_content = user_input
-                    parts.append(types.Part.from_text(text=text_content))
-                
-                if msg.get("file_uri"):
-                    parts.append(types.Part(
-                        file_data=types.FileData(
-                            file_uri=msg.get("file_uri"),
-                            mime_type=msg.get("mime_type")
-                        )
-                    ))
-                
-                if parts:
-                    contents.append(types.Content(role=role, parts=parts))
+    # Save initial user records to session before the request lifecycle terminates
+    save_memory(memory)
 
-            # Send structures directly to generate content execution
+            def generate_stream():
+        # Isolated generator does not read or save to Flask session globals
+        try:
             config = types.GenerateContentConfig(
                 system_instruction=memory["system"]
             )
@@ -291,26 +290,18 @@ def chat():
             )
             reply = response.text.strip() if response.text else "Model returned an empty response."
 
-            # Append results to thread session storage
-            memory["messages"].append({
-                "role": "assistant",
-                "content": reply
-            })
-
-            memory["messages"] = memory["messages"][-MAX_MEMORY:]
-            save_memory(memory)
-
+            # Yield directly to the out-of-context channel pipeline
             yield json.dumps({"response": reply})
 
         except Exception as e:
             print(f"Chat transaction failed: {e}")
-            err_msg = repr(e)
-            yield json.dumps({"response": f"Chat processing error: {err_msg}"})
+            yield json.dumps({"response": f"Chat processing error: {repr(e)}"})
 
-    # Wrapping via an open Response stream tricks cloud host proxies into keeping the channel open
+    # Clear line 299 from the except block and place it down here, matching 'def'
     return Response(generate_stream(), mimetype='application/json')
 
 
+# Remove all spaces before 'if' so it touches the far left edge of the file
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 1000))
     app.run(host="0.0.0.0", port=port)
