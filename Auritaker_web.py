@@ -264,44 +264,54 @@ def chat():
             parts.append(types.Part.from_text(text=text_content))
         
         if msg.get("file_uri"):
-            parts.append(types.Part(
-                file_data=types.FileData(
+            parts.append(
+                types.Part.from_uri(
                     file_uri=msg.get("file_uri"),
                     mime_type=msg.get("mime_type")
                 )
-            ))
+            )
         
         if parts:
             contents.append(types.Content(role=role, parts=parts))
 
-    # Save initial user records to session before the request lifecycle terminates
-    save_memory(memory)
-
     def generate_stream():
-        # Isolated generator does not read or save to Flask session globals
+        # Isolated generator handles chunked real-time tokens
+        full_reply_accumulated = ""
         try:
             config = types.GenerateContentConfig(
                 system_instruction=memory["system"]
             )
-            response = ai_client.models.generate_content(
+            
+            # ✅ Switched to generate_content_stream for live generation chunks
+            response_stream = ai_client.models.generate_content_stream(
                 model=MODEL,
                 contents=contents,
                 config=config
             )
-            reply = response.text.strip() if response.text else "Model returned an empty response."
+            
+            for chunk in response_stream:
+                if chunk.text:
+                    full_reply_accumulated += chunk.text
+                    # Yield text chunks cleanly using event-stream format or raw fragments
+                    yield chunk.text
 
-            # Yield directly to the out-of-context channel pipeline
-            yield json.dumps({"response": reply})
+            # Once streaming completes successfully, write full context back to history
+            memory["messages"].append({
+                "role": "assistant",
+                "content": full_reply_accumulated.strip()
+            })
+            memory["messages"] = memory["messages"][-MAX_MEMORY:]
+            save_memory(memory)
 
         except Exception as e:
             print(f"Chat transaction failed: {e}")
-            yield json.dumps({"response": f"Chat processing error: {repr(e)}"})
+            yield f"\n[Chat processing error: {repr(e)}]"
 
-    # Clear line 299 from the except block and place it down here, matching 'def'
-    return Response(generate_stream(), mimetype='application/json')
+    # Wrapping via an open response chunked stream layout
+    # Text/plain or text/event-stream ensures browsers render the stream progressively
+    return Response(generate_stream(), mimetype='text/plain')
 
 
-# Remove all spaces before 'if' so it touches the far left edge of the file
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 1000))
     app.run(host="0.0.0.0", port=port)
