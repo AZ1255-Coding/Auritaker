@@ -667,6 +667,9 @@
             wrap.innerHTML = `${avatarHTML}<div class="msg-bubble">${formatted}${mediaHTML}</div>`;
             inner.appendChild(wrap);
             document.getElementById('chat-box').scrollTop = 99999;
+
+            // Fixed return context reference for live streaming engines
+            return wrap.querySelector('.msg-bubble');
         }
 
         function showTyping() {
@@ -693,7 +696,7 @@
             setTimeout(() => el.style.display = 'none', 5000);
         }
 
-// ── Send ──
+        // ── Send ──
         async function sendMessage() {
             if (isLoading) return;
             const text = textarea.value.trim();
@@ -724,7 +727,6 @@
             document.getElementById('send-btn').disabled = true;
             showTyping();
 
-            // Construct multipart form data object
             const formData = new FormData();
             formData.append("message", text);
             if (attachedFile) {
@@ -732,7 +734,6 @@
             }
 
             try {
-                // Modified to handle the chunk stream from backend to bypass proxy cutoffs
                 const res = await fetch(BACKEND_URL + '/chat', {
                     method: 'POST',
                     body: formData,
@@ -743,31 +744,28 @@
                     throw new Error(`Server returned status code: ${res.status}`);
                 }
 
-                // Remove the typing indicator immediately when streaming starts
                 removeTyping();
 
                 const reader = res.body.getReader();
                 const decoder = new TextDecoder();
                 
-                // 1. Create a blank assistant message element in the UI to update live
-                const messageDiv = appendMessage('assistant', '');
-                const textSpan = messageDiv.querySelector('.message-text');
+                // Track dynamic node payload directly
+                const bubbleElement = appendMessage('assistant', '');
                 let accumulatedData = '';
 
-                // 2. Read chunks continuously from the HTTP stream response
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
                     
-                    // Decode the current chunk and append it
                     const chunk = decoder.decode(value, { stream: true });
                     accumulatedData += chunk;
                     
-                    // 3. Instantly update the text inside the chat bubble
-                    textSpan.textContent = accumulatedData;
+                    // Render raw text updates inside bubble safely
+                    bubbleElement.textContent = accumulatedData;
+                    document.getElementById('chat-box').scrollTop = 99999;
                 }
 
-                // 4. Once streaming is complete, save the finalized string to local memory
+                // Render compiled rich format translations onto final chunk accumulation
                 if (accumulatedData.trim()) {
                     const d = getData();
                     const c = d.chats.find(x => x.id === currentChatId);
@@ -775,10 +773,17 @@
                         c.messages.push({ role: 'assistant', text: accumulatedData }); 
                         saveData(d); 
                     }
+                    
+                    bubbleElement.innerHTML = accumulatedData
+                        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                        .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
+                        .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
+                        .replace(/\n/g,'<br>');
+
                     document.getElementById('current-chat-title').textContent = chat.title;
                     renderSidebar();
                 } else {
-                    textSpan.textContent = '❌ Something went wrong processing the payload.';
+                    bubbleElement.textContent = '❌ Something went wrong processing the payload.';
                 }
             } catch (err) {
                 removeTyping();
