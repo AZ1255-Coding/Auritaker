@@ -693,7 +693,7 @@
             setTimeout(() => el.style.display = 'none', 5000);
         }
 
-        // ── Send ──
+// ── Send ──
         async function sendMessage() {
             if (isLoading) return;
             const text = textarea.value.trim();
@@ -743,28 +743,42 @@
                     throw new Error(`Server returned status code: ${res.status}`);
                 }
 
+                // Remove the typing indicator immediately when streaming starts
+                removeTyping();
+
                 const reader = res.body.getReader();
                 const decoder = new TextDecoder();
+                
+                // 1. Create a blank assistant message element in the UI to update live
+                const messageDiv = appendMessage('assistant', '');
+                const textSpan = messageDiv.querySelector('.message-text');
                 let accumulatedData = '';
 
+                // 2. Read chunks continuously from the HTTP stream response
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
-                    accumulatedData += decoder.decode(value, { stream: true });
+                    
+                    // Decode the current chunk and append it
+                    const chunk = decoder.decode(value, { stream: true });
+                    accumulatedData += chunk;
+                    
+                    // 3. Instantly update the text inside the chat bubble
+                    textSpan.textContent = accumulatedData;
                 }
 
-                removeTyping();
-                const json = JSON.parse(accumulatedData);
-
-                if (json.response) {
-                    appendMessage('assistant', json.response);
+                // 4. Once streaming is complete, save the finalized string to local memory
+                if (accumulatedData.trim()) {
                     const d = getData();
                     const c = d.chats.find(x => x.id === currentChatId);
-                    if (c) { c.messages.push({ role: 'assistant', text: json.response }); saveData(d); }
+                    if (c) { 
+                        c.messages.push({ role: 'assistant', text: accumulatedData }); 
+                        saveData(d); 
+                    }
                     document.getElementById('current-chat-title').textContent = chat.title;
                     renderSidebar();
                 } else {
-                    appendMessage('assistant', '❌ Something went wrong processing the payload.');
+                    textSpan.textContent = '❌ Something went wrong processing the payload.';
                 }
             } catch (err) {
                 removeTyping();
@@ -775,7 +789,7 @@
                 document.getElementById('send-btn').disabled = false;
             }
         }
-
+        
         // ── Modals ──
         function closeModal(id) {
             document.getElementById(id).classList.remove('show');
