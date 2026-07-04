@@ -155,6 +155,8 @@ def chat():
         if msg.get("file_uri"): parts.append(types.Part.from_uri(file_uri=msg["file_uri"], mime_type=msg["mime_type"]))
         contents.append(types.Content(role="model" if msg["role"] == "assistant" else "user", parts=parts))
 
+    app_ref = app._get_current_object()
+
     @copy_current_request_context
     def generate_stream():
         full_reply = ""
@@ -164,8 +166,6 @@ def chat():
                 if chunk.text:
                     full_reply += chunk.text
                     yield chunk.text
-            memory["messages"].append({"role": "assistant", "content": full_reply.strip()})
-            save_memory(memory)
         except Exception as e:
             yield f"\n[Chat processing error: {repr(e)}]"
 
