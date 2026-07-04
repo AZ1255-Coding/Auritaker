@@ -1,11 +1,9 @@
-from flask import Flask, render_template, request, jsonify, session, redirect, send_from_directory, Response
+from flask import Flask, render_template, request, jsonify, session, redirect, send_from_directory, Response, copy_current_request_context
 from flask_cors import CORS
-from flask_session import Session  # Resolves 4KB client cookie overflow issue
+from flask_session import Session
 from tavily import TavilyClient
 import os, json, re, time
-# Using the updated standalone package module
 from ddgs import DDGS
-# Import the official modern Google GenAI SDK
 from google import genai
 from google.genai import types
 
@@ -14,17 +12,12 @@ from google.genai import types
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "auritaker_secret")
 
-# Allow larger file payloads (up to 500 Megabytes) for videos
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
-
-# Configure Server-Side File System Sessions
 app.config["SESSION_TYPE"] = "filesystem"
 app.config["SESSION_PERMANENT"] = False
 Session(app)
 
-CORS(app, supports_credentials=True, origins=[
-    "https://github.io"
-])
+CORS(app, supports_credentials=True, origins=["https://github.io"])
 
 MAX_MEMORY = 20
 
@@ -32,26 +25,10 @@ MAX_MEMORY = 20
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
-
-# High-efficiency, fast multi-modal workhorse model
 MODEL = "gemini-3.1-flash-lite"
-
-# Initialize official GenAI client
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-SYSTEM_ROLE = """
-You are Auritaker AI, a multimodal sports assistant.
-
-RULES:
-- Prioritize provided real-time context when available.
-- If information is not in the provided context, use general knowledge when appropriate.
-- Never fabricate specific facts.
-- If information cannot be verified, say: "Not available in sources."
-- Be concise and factual.
-- When analyzing images or video clips, provide detailed insights about sports-related content.
-- Don't be too obsessed about sports.
-- If there's no info available, then do not say that some things (based on the prompt) did not happen. Say: "Sorry, but I couldn't find any information about" and whatever was asked for finding in the user's prompt. It is similar to the scratch code: "join (Sorry, but I couldn't find any information about ) ((whatever was asked to find in prompt))"
-"""
+SYSTEM_ROLE = """You are Auritaker AI, a multimodal sports assistant. RULES: Prioritize context. Never fabricate facts. If unverified, say 'Not available in sources.' Be concise."""
 
 BAD_DOMAINS = ["quora.com", "reddit.com", "medium.com"]
 
@@ -61,70 +38,44 @@ tavily = None
 if TAVILY_API_KEY:
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
-        print("Tavily initialized")
     except Exception as e:
         print("Tavily init failed:", e)
 
-
 def should_search(text: str) -> bool:
-    patterns = [
-        r"\blatest\b", r"\bnews\b", r"\btoday\b",
-        r"\bwho is\b", r"\bwhat is\b",
-        r"\bvs\b", r"\bscore\b", r"\bweather\b",
-        r"\brecent\b", r"\bupdate\b"
-    ]
-    text = text.lower()
-    return any(re.search(p, text) for p in patterns)
-
+    patterns = [r"\blatest\b", r"\bnews\b", r"\btoday\b", r"\bwho is\b", r"\bwhat is\b", r"\bvs\b", r"\bscore\b", r"\bweather\b", r"\brecent\b", r"\bupdate\b"]
+    return any(re.search(p, text.lower()) for p in patterns)
 
 def web_search(query):
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=5))
-        
-        cleaned_results = []
+        cleaned = []
         for item in results:
             url_link = item.get("url", "")
             if not any(b in url_link for b in BAD_DOMAINS):
-                cleaned_results.append({
-                    "title": item.get("title"),
-                    "snippet": item.get("snippet") or item.get("body"),
-                    "url": url_link
-                })
-        return {"query": query, "results": cleaned_results}
+                cleaned.append({"title": item.get("title"), "snippet": item.get("snippet") or item.get("body"), "url": url_link})
+        return {"query": query, "results": cleaned}
     except Exception as e:
         print("DuckDuckGo Search error:", e)
         return None
 
-
-# ---------------- MEMORY ---------------- #
+# ---------------- MEMORY & USER STORAGE ---------------- #
 
 def get_memory():
-    return session.get("memory", {
-        "system": SYSTEM_ROLE,
-        "messages": []
-    })
-
+    return session.get("memory", {"system": SYSTEM_ROLE, "messages": []})
 
 def save_memory(memory):
     session["memory"] = memory
     session.modified = True
 
-
-# ---------------- USER STORAGE ---------------- #
-
 USERS_FILE = "users.json"
-
 def load_users():
     if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, "r") as f:
-            return json.load(f)
+        with open(USERS_FILE, "r") as f: return json.load(f)
     return {}
 
 def save_users(users):
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f)
-
+    with open(USERS_FILE, "w") as f: json.dump(users, f)
 
 # ---------------- ROUTES ---------------- #
 
@@ -132,19 +83,15 @@ def save_users(users):
 def favicon():
     return send_from_directory('static', 'favicon.ico')
 
-
 @app.route("/")
 def home():
-    if "user" not in session:
-        return redirect("/login")
+    if "user" not in session: return redirect("/login")
     return render_template("index.html")
-
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        u = request.form.get("username", "")
-        p = request.form.get("password", "")
+        u, p = request.form.get("username", ""), request.form.get("password", "")
         users = load_users()
         if users.get(u) == p:
             session["user"] = u
@@ -153,15 +100,12 @@ def login():
         return render_template("login.html", error="Invalid credentials")
     return render_template("login.html")
 
-
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if request.method == "POST":
-        u = request.form.get("username", "")
-        p = request.form.get("password", "")
+        u, p = request.form.get("username", ""), request.form.get("password", "")
         users = load_users()
-        if u in users:
-            return render_template("signup.html", error="User exists")
+        if u in users: return render_template("signup.html", error="User exists")
         users[u] = p
         save_users(users)
         session["user"] = u
@@ -169,149 +113,63 @@ def signup():
         return redirect("/")
     return render_template("signup.html")
 
-
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect("/login")
 
-
-# ---------------- CHAT (MULTIMODAL WITH RESPONSE STREAMING OVERRIDES) ---------------- #
+# ---------------- CHAT ROUTE ---------------- #
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    if "user" not in session:
-        return jsonify({"response": "Not logged in"}), 401
-    if not ai_client:
-        return jsonify({"response": "Model error: GEMINI_API_KEY missing on server"}), 500
+    if "user" not in session: return jsonify({"response": "Not logged in"}), 401
+    if not ai_client: return jsonify({"response": "Model error"}), 500
 
     raw_message = request.form.get("message", "")
-    user_input = raw_message
-    uploaded_file_obj = None
-
-    if "file" in request.files:
-        f = request.files["file"]
-        if f and f.filename:
-            uploaded_file_obj = f
-
-    if not user_input.strip() and not uploaded_file_obj:
-        return jsonify({"response": "Empty message and no attachment"}), 400
-
-    # Read from session safely while still inside the active route request context
+    uploaded_file_obj = request.files.get("file")
+    
     memory = get_memory()
+    user_input = raw_message
+    
+    context = web_search(user_input) if user_input.strip() and should_search(user_input) else None
+    if context: user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
 
-    # -------- WEB SEARCH -------- #
-    context = None
-    if user_input.strip() and should_search(user_input):
-        context = web_search(user_input)
-    if context:
-        user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
-
-    file_uri_to_store = None
-    mime_type_to_store = None
-
-    # Handle file operations upfront inside the request context boundaries
-    if uploaded_file_obj:
+    file_uri_to_store, mime_type_to_store = None, None
+    if uploaded_file_obj and uploaded_file_obj.filename:
         temp_dir = os.path.join(os.getcwd(), "temp_uploads")
         os.makedirs(temp_dir, exist_ok=True)
         temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
         uploaded_file_obj.save(temp_path)
-        
         try:
-            print(f"Uploading {uploaded_file_obj.filename} to Gemini File API...")
             gemini_file = ai_client.files.upload(file=temp_path)
-            
-            if "video" in gemini_file.mime_type.lower():
-                print("Video file detected. Waiting for Gemini backend processing...")
-                attempts = 0
-                while gemini_file.state.name == "PROCESSING" and attempts < 40:
-                    time.sleep(2)
-                    gemini_file = ai_client.files.get(name=gemini_file.name)
-                    attempts += 1
-                    print(f"Processing state: {gemini_file.state.name} (Loop {attempts})")
-                
-                if gemini_file.state.name != "ACTIVE":
-                    raise ValueError(f"Video file processing failed. State: {gemini_file.state.name}")
-
-            file_uri_to_store = gemini_file.uri
-            mime_type_to_store = gemini_file.mime_type
+            file_uri_to_store, mime_type_to_store = gemini_file.uri, gemini_file.mime_type
         finally:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            if os.path.exists(temp_path): os.remove(temp_path)
 
-    # Pre-append the user's incoming payload to our memory clone
-    user_record = {
-        "role": "user",
-        "content": raw_message if raw_message.strip() else "[Media attachment shared]"
-    }
-    if file_uri_to_store:
-        user_record["file_uri"] = file_uri_to_store
-        user_record["mime_type"] = mime_type_to_store
-
-    memory["messages"].append(user_record)
+    memory["messages"].append({"role": "user", "content": raw_message, "file_uri": file_uri_to_store, "mime_type": mime_type_to_store})
     recent = memory["messages"][-10:]
-
-    # Build Pydantic Content parameters before yielding execution
+    
     contents = []
     for msg in recent:
-        role = "model" if msg["role"] == "assistant" else "user"
-        parts = []
-        
-        if msg.get("content"):
-            text_content = msg["content"]
-            if msg == recent[-1] and role == "user" and context:
-                text_content = user_input
-            parts.append(types.Part.from_text(text=text_content))
-        
-        if msg.get("file_uri"):
-            parts.append(
-                types.Part.from_uri(
-                    file_uri=msg.get("file_uri"),
-                    mime_type=msg.get("mime_type")
-                )
-            )
-        
-        if parts:
-            contents.append(types.Content(role=role, parts=parts))
+        parts = [types.Part.from_text(text=msg["content"])]
+        if msg.get("file_uri"): parts.append(types.Part.from_uri(file_uri=msg["file_uri"], mime_type=msg["mime_type"]))
+        contents.append(types.Content(role="model" if msg["role"] == "assistant" else "user", parts=parts))
 
+    @copy_current_request_context
     def generate_stream():
-        # Isolated generator handles chunked real-time tokens
-        full_reply_accumulated = ""
+        full_reply = ""
         try:
-            config = types.GenerateContentConfig(
-                system_instruction=memory["system"]
-            )
-            
-            # ✅ Switched to generate_content_stream for live generation chunks
-            response_stream = ai_client.models.generate_content_stream(
-                model=MODEL,
-                contents=contents,
-                config=config
-            )
-            
+            response_stream = ai_client.models.generate_content_stream(model=MODEL, contents=contents, config=types.GenerateContentConfig(system_instruction=memory["system"]))
             for chunk in response_stream:
                 if chunk.text:
-                    full_reply_accumulated += chunk.text
-                    # Yield text chunks cleanly using event-stream format or raw fragments
+                    full_reply += chunk.text
                     yield chunk.text
-
-            # Once streaming completes successfully, write full context back to history
-            memory["messages"].append({
-                "role": "assistant",
-                "content": full_reply_accumulated.strip()
-            })
-            memory["messages"] = memory["messages"][-MAX_MEMORY:]
+            memory["messages"].append({"role": "assistant", "content": full_reply.strip()})
             save_memory(memory)
-
         except Exception as e:
-            print(f"Chat transaction failed: {e}")
             yield f"\n[Chat processing error: {repr(e)}]"
 
-    # Wrapping via an open response chunked stream layout
-    # Text/plain or text/event-stream ensures browsers render the stream progressively
-    return Response(generate_stream(), mimetype='text/plain')
-
+    return Response(generate_stream(), mimetype='text/markdown')
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 1000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 1000)))
