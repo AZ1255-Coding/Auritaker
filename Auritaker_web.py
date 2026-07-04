@@ -131,9 +131,20 @@ def chat():
     memory = get_memory()
     user_input = raw_message
     
-    context = web_search(user_input) if user_input.strip() and should_search(user_input) else None
-    if context: user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
+    # 1. Search happens ONCE here
+    context = None
+    try:
+        if user_input.strip() and should_search(user_input):
+            context = web_search(user_input)
+    except Exception as e:
+        print(f"Web search skipped due to error: {e}")
+        context = None 
 
+    # 2. Add the context to the input (only once)
+    if context:
+        user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
+
+    # 3. File upload logic
     file_uri_to_store, mime_type_to_store = None, None
     if uploaded_file_obj and uploaded_file_obj.filename:
         temp_dir = os.path.join(os.getcwd(), "temp_uploads")
@@ -146,25 +157,37 @@ def chat():
         finally:
             if os.path.exists(temp_path): os.remove(temp_path)
 
-    memory["messages"].append({"role": "user", "content": raw_message, "file_uri": file_uri_to_store, "mime_type": mime_type_to_store})
+    memory["messages"].append({
+        "role": "user", 
+        "content": user_input, 
+        "file_uri": file_uri_to_store, 
+        "mime_type": mime_type_to_store
+    })
     recent = memory["messages"][-10:]
     
+    # 4. Build contents list
     contents = []
     for msg in recent:
-        parts = [types.Part.from_text(text=msg["content"])]
-        if msg.get("file_uri"): parts.append(types.Part.from_uri(file_uri=msg["file_uri"], mime_type=msg["mime_type"]))
-        contents.append(types.Content(role="model" if msg["role"] == "assistant" else "user", parts=parts))
+        parts = []
+        if msg.get("content"):
+            parts.append(types.Part.from_text(text=msg["content"]))
+        if msg.get("file_uri"):
+            parts.append(types.Part.from_uri(file_uri=msg.get("file_uri"), mime_type=msg.get("mime_type")))
+        
+        if parts:
+            contents.append(types.Content(role="model" if msg["role"] == "assistant" else "user", parts=parts))
 
-    app_ref = app._get_current_object()
-
+    # 5. Stream the response
     @copy_current_request_context
     def generate_stream():
-        full_reply = ""
         try:
-            response_stream = ai_client.models.generate_content_stream(model=MODEL, contents=contents, config=types.GenerateContentConfig(system_instruction=memory["system"]))
+            response_stream = ai_client.models.generate_content_stream(
+                model=MODEL, 
+                contents=contents, 
+                config=types.GenerateContentConfig(system_instruction=memory["system"])
+            )
             for chunk in response_stream:
                 if chunk.text:
-                    full_reply += chunk.text
                     yield chunk.text
         except Exception as e:
             yield f"\n[Chat processing error: {repr(e)}]"
