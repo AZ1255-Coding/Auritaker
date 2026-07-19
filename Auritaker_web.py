@@ -151,9 +151,15 @@ def chat():
         os.makedirs(temp_dir, exist_ok=True)
         temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
         uploaded_file_obj.save(temp_path)
+        # DEBUG: Confirm file size
+        file_size = os.path.getsize(temp_path)
+        print(f"File saved locally: {temp_path}, Size: {file_size} bytes")
         try:
             gemini_file = ai_client.files.upload(file=temp_path)
-            file_uri_to_store, mime_type_to_store = gemini_file.uri, gemini_file.mime_type
+            print(f"Gemini API upload successful: {gemini_file.uri}")
+        except Exception as e:
+            print(f"Gemini Files API Error: {repr(e)}")
+            raise # Re-raise to see it in logs
         finally:
             if os.path.exists(temp_path): os.remove(temp_path)
 
