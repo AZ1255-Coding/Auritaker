@@ -28,7 +28,11 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 MODEL = "gemini-3.1-flash-lite"
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-SYSTEM_ROLE = """You are Auritaker AI, a multimodal sports assistant. RULES: Prioritize context. Never fabricate facts. If unverified, say 'Not available in sources.' Be concise."""
+SYSTEM_ROLE = """You are Auritaker AI, a multimodal sports assistant. RULES: Prioritize context. Never fabricate facts. If unverified, say 'Not available in sources.' and provide reasoning. Be concise."""
+
+IMAGEN_MODEL = "imagen-3.0-generate-001"
+IMAGE_SAVE_DIR = "static/generated_images"
+os.makedirs(IMAGE_SAVE_DIR, exist_ok=True)
 
 BAD_DOMAINS = ["quora.com", "reddit.com", "medium.com"]
 
@@ -117,6 +121,68 @@ def signup():
 def logout():
     session.clear()
     return redirect("/login")
+
+@app.route("/generate-image", methods=["POST"])
+def generate_image():
+    if "user" not in session:
+        return jsonify({"error": "Not logged in"}), 401
+    
+    # Get the prompt from the frontend
+    data = request.get_json()
+    prompt = data.get("prompt", "")
+
+    if not prompt:
+        return jsonify({"error": "No prompt provided"}), 400
+
+    print(f"Generating image for prompt: {prompt}")
+
+    try:
+        # 1. Call Imagen Model
+        response = ai_client.models.generate_images(
+            model=IMAGEN_MODEL,
+            prompt=prompt,
+            config=types.GenerateImagesConfig(
+                number_of_images=1,
+                aspect_ratio="16:9",  # or "9:16", "1:1", etc.
+                # Add more configuration if needed:
+                # safety_filter_level="block_only_high",
+                # person_generation="allow_adult",
+                # aspect_ratio="16:9"
+            )
+        )
+
+        if not response.generated_images:
+            return jsonify({"error": "Image generation failed."}), 500
+
+        # 2. Save the generated image locally
+        # Imagen returns a `GeneratedImage` object; use `.image_bytes` to get raw data
+        image_bytes = response.generated_images[0].image_bytes
+        image_filename = f"{session['user']}_{int(time.time())}.jpg"
+        local_path = os.path.join(IMAGE_SAVE_DIR, image_filename)
+        
+        with open(local_path, "wb") as f:
+            f.write(image_bytes)
+
+        # 3. Construct the URL for the frontend
+        # We need to expose the `static/generated_images` folder via a route
+        image_url = f"/static/generated_images/{image_filename}"
+
+        print(f"Image generated and saved at: {image_url}")
+
+        return jsonify({
+            "status": "success",
+            "image_url": image_url,
+            "original_prompt": prompt
+        })
+
+    except Exception as e:
+        print(f"Image Generation Error: {repr(e)}")
+        return jsonify({"error": f"Failed to generate image: {str(e)}"}), 500
+
+# This route is needed to serve files from the static folder safely
+@app.route("/static/generated_images/<filename>")
+def serve_generated_image(filename):
+    return send_from_directory(IMAGE_SAVE_DIR, filename)
 
 # ---------------- CHAT ROUTE ---------------- #
 
