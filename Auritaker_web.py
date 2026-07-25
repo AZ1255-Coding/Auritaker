@@ -28,11 +28,7 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 MODEL = "gemini-3.1-flash-lite"
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-SYSTEM_ROLE = """You are Auritaker AI, a multimodal sports assistant. RULES: Prioritize context. Never fabricate facts. If unverified, say 'Not available in sources.' and provide reasoning. Be concise."""
-
-IMAGEN_MODEL = "imagen-3.0-generate-001"
-IMAGE_SAVE_DIR = "static/generated_images"
-os.makedirs(IMAGE_SAVE_DIR, exist_ok=True)
+SYSTEM_ROLE = """You are Auritaker AI, a multimodal sports assistant. RULES: Prioritize context. Never fabricate facts. If unverified, say 'Not available in sources.' Be concise."""
 
 BAD_DOMAINS = ["quora.com", "reddit.com", "medium.com"]
 
@@ -122,67 +118,9 @@ def logout():
     session.clear()
     return redirect("/login")
 
-@app.route("/generate-image", methods=["POST"])
-def generate_image():
-    if "user" not in session:
-        return jsonify({"error": "Not logged in"}), 401
-    
-    # Get the prompt from the frontend
-    data = request.get_json()
-    prompt = data.get("prompt", "")
-
-    if not prompt:
-        return jsonify({"error": "No prompt provided"}), 400
-
-    print(f"Generating image for prompt: {prompt}")
-
-    try:
-        # 1. Call Imagen Model
-        response = ai_client.models.generate_images(
-            model=IMAGEN_MODEL,
-            prompt=prompt,
-            config=types.GenerateImagesConfig(
-                number_of_images=1,
-                aspect_ratio="16:9",  # or "9:16", "1:1", etc.
-                # Add more configuration if needed:
-                # safety_filter_level="block_only_high",
-                # person_generation="allow_adult",
-                # aspect_ratio="16:9"
-            )
-        )
-
-        if not response.generated_images:
-            return jsonify({"error": "Image generation failed."}), 500
-
-        # 2. Save the generated image locally
-        # Imagen returns a `GeneratedImage` object; use `.image_bytes` to get raw data
-        image_bytes = response.generated_images[0].image_bytes
-        image_filename = f"{session['user']}_{int(time.time())}.jpg"
-        local_path = os.path.join(IMAGE_SAVE_DIR, image_filename)
-        
-        with open(local_path, "wb") as f:
-            f.write(image_bytes)
-
-        # 3. Construct the URL for the frontend
-        # We need to expose the `static/generated_images` folder via a route
-        image_url = f"/static/generated_images/{image_filename}"
-
-        print(f"Image generated and saved at: {image_url}")
-
-        return jsonify({
-            "status": "success",
-            "image_url": image_url,
-            "original_prompt": prompt
-        })
-
-    except Exception as e:
-        print(f"Image Generation Error: {repr(e)}")
-        return jsonify({"error": f"Failed to generate image: {str(e)}"}), 500
-
-# This route is needed to serve files from the static folder safely
 @app.route("/static/generated_images/<filename>")
 def serve_generated_image(filename):
-    return send_from_directory(IMAGE_SAVE_DIR, filename)
+    return send_from_directory("static/generated_images", filename)
 
 # ---------------- CHAT ROUTE ---------------- #
 
@@ -197,20 +135,26 @@ def chat():
     memory = get_memory()
     user_input = raw_message
     
-    # 1. Search happens ONCE here
+    # Check if user requested an image via slash command
+    is_image_command = user_input.strip().startswith("/imagine")
+    if is_image_command:
+        image_prompt = user_input.strip()[8:].strip()
+        user_input = f"Generate an image based on this description: {image_prompt}"
+
+    # 1. Search happens ONCE here (skipped if image command)
     context = None
     try:
-        if user_input.strip() and should_search(user_input):
+        if not is_image_command and user_input.strip() and should_search(user_input):
             context = web_search(user_input)
     except Exception as e:
         print(f"Web search skipped due to error: {e}")
         context = None 
 
-    # 2. Add the context to the input (only once)
+    # 2. Add the context to the input
     if context:
         user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
 
-    # 3. File upload logic with robust diagnostics and processing state check for videos
+    # 3. File upload logic with processing state check for videos
     file_uri_to_store, mime_type_to_store = None, None
     if uploaded_file_obj and uploaded_file_obj.filename:
         temp_dir = os.path.join(os.getcwd(), "temp_uploads")
@@ -222,10 +166,8 @@ def chat():
             file_size = os.path.getsize(temp_path)
             print(f"Successfully saved file locally: {temp_path}, Size: {file_size} bytes")
             
-            # Upload file to Gemini Files API
             gemini_file = ai_client.files.upload(file=temp_path)
             
-            # If it's a video, wait briefly until its state becomes ACTIVE
             if uploaded_file_obj.filename.lower().endswith(('.mp4', '.webm', '.mov', '.wmv', '.quicktime')):
                 print("Processing video file on Gemini servers...")
                 while gemini_file.state.name == "PROCESSING":
@@ -241,6 +183,7 @@ def chat():
         finally:
             if os.path.exists(temp_path): 
                 os.remove(temp_path)
+
     memory["messages"].append({
         "role": "user", 
         "content": user_input, 
@@ -265,18 +208,34 @@ def chat():
     @copy_current_request_context
     def generate_stream():
         try:
+            config_kwargs = {"system_instruction": memory["system"]}
+            if is_image_command:
+                config_kwargs["response_modalities"] = ["TEXT", "IMAGE"]
+
             response_stream = ai_client.models.generate_content_stream(
                 model=MODEL, 
                 contents=contents, 
-                config=types.GenerateContentConfig(system_instruction=memory["system"])
+                config=types.GenerateContentConfig(**config_kwargs)
             )
             for chunk in response_stream:
                 if chunk.text:
                     yield chunk.text
+                if hasattr(chunk, "candidates") and chunk.candidates:
+                    for candidate in chunk.candidates:
+                        if candidate.content and candidate.content.parts:
+                            for part in candidate.content.parts:
+                                if getattr(part, "inline_data", None):
+                                    img_bytes = part.inline_data.data
+                                    img_filename = f"gen_{session['user']}_{int(time.time())}.jpg"
+                                    img_path = os.path.join("static/generated_images", img_filename)
+                                    os.makedirs("static/generated_images", exist_ok=True)
+                                    with open(img_path, "wb") as img_file:
+                                        img_file.write(img_bytes)
+                                    yield f"\n\n![Generated Image](/static/generated_images/{img_filename})\n\n"
         except Exception as e:
             yield f"\n[Chat processing error: {repr(e)}]"
 
     return Response(generate_stream(), mimetype='text/markdown')
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 1000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 1010)))
