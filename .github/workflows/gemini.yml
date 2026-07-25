@@ -1,0 +1,14 @@
+name: Gemini Workflow
+on: [pull_request]
+
+jobs:
+  gemini_task:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Out Code
+        uses: actions/checkout@v4
+
+      - name: Run Gemini Actions
+        uses: dortort/gemini-actions@v0.1.0
+        with:
+          gemini-key: ${{ secrets.GEMINI_API_KEY }}
