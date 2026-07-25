@@ -25,7 +25,7 @@ MAX_MEMORY = 20
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
-MODEL = "gemini-3.5-flash-lite"
+MODEL = "gemini-3.1-flash-lite"
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 SYSTEM_ROLE = """You are Auritaker AI, a multimodal sports assistant. RULES: Prioritize context. Never fabricate facts. If unverified, say 'Not available in sources.' Be concise."""
@@ -144,24 +144,26 @@ def chat():
     if context:
         user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
 
-    # 3. File upload logic
+    # 3. File upload logic with robust diagnostics
     file_uri_to_store, mime_type_to_store = None, None
     if uploaded_file_obj and uploaded_file_obj.filename:
         temp_dir = os.path.join(os.getcwd(), "temp_uploads")
         os.makedirs(temp_dir, exist_ok=True)
         temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
-        uploaded_file_obj.save(temp_path)
-        # DEBUG: Confirm file size
-        file_size = os.path.getsize(temp_path)
-        print(f"File saved locally: {temp_path}, Size: {file_size} bytes")
+        
         try:
+            uploaded_file_obj.save(temp_path)
+            file_size = os.path.getsize(temp_path)
+            print(f"Successfully saved file locally: {temp_path}, Size: {file_size} bytes")
+            
             gemini_file = ai_client.files.upload(file=temp_path)
-            print(f"Gemini API upload successful: {gemini_file.uri}")
+            file_uri_to_store, mime_type_to_store = gemini_file.uri, gemini_file.mime_type
+            print(f"Successfully uploaded to Gemini API: {file_uri_to_store} ({mime_type_to_store})")
         except Exception as e:
-            print(f"Gemini Files API Error: {repr(e)}")
-            raise # Re-raise to see it in logs
+            print(f"CRITICAL FILE UPLOAD ERROR: {repr(e)}")
         finally:
-            if os.path.exists(temp_path): os.remove(temp_path)
+            if os.path.exists(temp_path): 
+                os.remove(temp_path)
 
     memory["messages"].append({
         "role": "user", 
