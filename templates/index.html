@@ -165,6 +165,22 @@
         }
         #overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; backdrop-filter: blur(2px); }
         #overlay.show { display: block; }
+        .chat-message img.generated-image {
+            max-width: 100%;
+            max-height: 300px;
+            border-radius: 8px;
+            margin-top: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+        }
+
+/* Style for images within the assistant's response */
+.chat-message.assistant div.markdown-content img {
+    max-width: 80%;
+    border-radius: 8px;
+    margin: 10px 0;
+    display: block;
+}
     </style>
 </head>
 <body>
