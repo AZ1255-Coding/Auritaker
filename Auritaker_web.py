@@ -144,7 +144,7 @@ def chat():
     if context:
         user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
 
-    # 3. File upload logic with robust diagnostics
+    # 3. File upload logic with robust diagnostics and processing state check for videos
     file_uri_to_store, mime_type_to_store = None, None
     if uploaded_file_obj and uploaded_file_obj.filename:
         temp_dir = os.path.join(os.getcwd(), "temp_uploads")
@@ -156,7 +156,18 @@ def chat():
             file_size = os.path.getsize(temp_path)
             print(f"Successfully saved file locally: {temp_path}, Size: {file_size} bytes")
             
+            # Upload file to Gemini Files API
             gemini_file = ai_client.files.upload(file=temp_path)
+            
+            # If it's a video, wait briefly until its state becomes ACTIVE
+            if uploaded_file_obj.filename.lower().endswith(('.mp4', '.webm', '.mov', '.wmv', '.quicktime')):
+                print("Processing video file on Gemini servers...")
+                while gemini_file.state.name == "PROCESSING":
+                    time.sleep(2)
+                    gemini_file = ai_client.files.get(name=gemini_file.name)
+                if gemini_file.state.name == "FAILED":
+                    raise Exception("Video processing failed on Gemini server.")
+
             file_uri_to_store, mime_type_to_store = gemini_file.uri, gemini_file.mime_type
             print(f"Successfully uploaded to Gemini API: {file_uri_to_store} ({mime_type_to_store})")
         except Exception as e:
@@ -164,7 +175,6 @@ def chat():
         finally:
             if os.path.exists(temp_path): 
                 os.remove(temp_path)
-
     memory["messages"].append({
         "role": "user", 
         "content": user_input, 
