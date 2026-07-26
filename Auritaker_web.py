@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, jsonify, session, redirect, s
 from flask_cors import CORS
 from flask_session import Session
 from tavily import TavilyClient
-import os, json, re, time
+import os, json, re, time, urllib.parse, requests
 from ddgs import DDGS
 from google import genai
 from google.genai import types
@@ -26,7 +26,6 @@ MAX_MEMORY = 20
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 MODEL = "gemini-3.5-flash-lite"
-IMAGE_MODEL = "gemini-2.5-flash-image"
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 SYSTEM_ROLE = """You are Auritaker AI, a multimodal sports assistant. RULES: Prioritize context. Never fabricate facts. If unverified, say 'Not available in sources.' and provide reasoning. Be concise. NEVER output raw tool JSON like 'dalle.text2im' or function calling syntax; fulfill generation tasks directly through text or native media streams."""
@@ -135,34 +134,20 @@ def chat():
     memory = get_memory()
     user_input = raw_message
     
-    # ---------------- DYNAMIC IMAGE GENERATION ROUTING ---------------- #
+    # ---------------- DYNAMIC IMAGE GENERATION ROUTING (Pollinations.ai) ---------------- #
     is_image_command = user_input.strip().startswith("/imagine")
     if is_image_command:
         image_prompt = user_input.strip()[8:].strip()
-        print(f"Triggering image generation via {IMAGE_MODEL} for prompt: {image_prompt}")
+        print(f"Triggering Pollinations image generation for prompt: {image_prompt}")
         
         try:
-            image_contents = [types.Content(role="user", parts=[types.Part.from_text(text=f"Generate an image: {image_prompt}")])]
+            encoded_prompt = urllib.parse.quote(image_prompt)
+            pollinations_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
             
-            # Switch to an image-capable model dynamically
-            response = ai_client.models.generate_content(
-                model=IMAGE_MODEL,
-                contents=image_contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=memory["system"],
-                    response_modalities=["TEXT", "IMAGE"]
-                )
-            )
+            img_response = requests.get(pollinations_url, timeout=30)
             
-            img_bytes = None
-            for candidate in response.candidates:
-                if candidate.content and candidate.content.parts:
-                    for part in candidate.content.parts:
-                        if getattr(part, "inline_data", None):
-                            img_bytes = part.inline_data.data
-                            break
-            
-            if img_bytes:
+            if img_response.status_code == 200:
+                img_bytes = img_response.content
                 img_filename = f"gen_{session['user']}_{int(time.time())}.jpg"
                 img_path = os.path.join("static/generated_images", img_filename)
                 os.makedirs("static/generated_images", exist_ok=True)
@@ -179,7 +164,7 @@ def chat():
                     return Response(f"\n\n![Generated Image](/static/generated_images/{img_filename})\n\n", mimetype='text/markdown')
                 return send_image_response()
             else:
-                raise Exception("Model did not return image bytes in inline_data.")
+                raise Exception(f"Pollinations returned status code {img_response.status_code}")
                 
         except Exception as e:
             print(f"Image generation error: {repr(e)}")
@@ -187,9 +172,6 @@ def chat():
             def send_error_response():
                 return Response(f"\n[Image generation failed: {repr(e)}]", mimetype='text/markdown')
             return send_error_response()
-
-    # ---------------- STANDARD CHAT LOGIC (Using Flash-Lite) ---------------- #
-    # ... (rest of your search, file upload, and streaming chat code utilizing MODEL)
 
     # ---------------- STANDARD CHAT LOGIC ---------------- #
 
