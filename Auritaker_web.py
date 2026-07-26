@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, session, redirect, send_from_directory, Response, copy_current_request_context
+\from flask import Flask, render_template, request, jsonify, session, redirect, send_from_directory, Response, copy_current_request_context
 from flask_cors import CORS
 from flask_session import Session
 from tavily import TavilyClient
@@ -142,11 +142,13 @@ def chat():
         
         try:
             encoded_prompt = urllib.parse.quote(image_prompt)
-            pollinations_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+            pollinations_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
             
-            img_response = requests.get(pollinations_url, timeout=30)
+            headers = {"User-Agent": "Mozilla/5.0"}
+            img_response = requests.get(pollinations_url, headers=headers, timeout=60)
             
-            if img_response.status_code == 200:
+            content_type = img_response.headers.get("content-type", "")
+            if img_response.status_code == 200 and "image" in content_type:
                 img_bytes = img_response.content
                 img_filename = f"gen_{session['user']}_{int(time.time())}.jpg"
                 img_path = os.path.join("static/generated_images", img_filename)
@@ -164,7 +166,7 @@ def chat():
                     return Response(f"\n\n![Generated Image](/static/generated_images/{img_filename})\n\n", mimetype='text/markdown')
                 return send_image_response()
             else:
-                raise Exception(f"Pollinations returned status code {img_response.status_code}")
+                raise Exception(f"Pollinations did not return an image (Status: {img_response.status_code}, Content-Type: {content_type})")
                 
         except Exception as e:
             print(f"Image generation error: {repr(e)}")
