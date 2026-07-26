@@ -123,7 +123,6 @@ def serve_generated_image(filename):
     return send_from_directory("static/generated_images", filename)
 
 # ---------------- CHAT ROUTE ---------------- #
-
 @app.route("/chat", methods=["POST"])
 def chat():
     if "user" not in session: return jsonify({"response": "Not logged in"}), 401
@@ -135,16 +134,59 @@ def chat():
     memory = get_memory()
     user_input = raw_message
     
-    # Check if user requested an image via slash command
+    # ---------------- IMAGEN 3 INTERCEPTION ---------------- #
     is_image_command = user_input.strip().startswith("/imagine")
     if is_image_command:
         image_prompt = user_input.strip()[8:].strip()
-        user_input = f"Generate an image based on this description: {image_prompt}"
+        print(f"Triggering Imagen 3 for prompt: {image_prompt}")
+        
+        try:
+            # Call Imagen model directly using the official Google GenAI SDK syntax
+            result = ai_client.models.generate_images(
+                model="imagen-3.0-generate-002",
+                prompt=image_prompt,
+                config=types.GenerateImagesConfig(
+                    number_of_images=1,
+                    aspect_ratio="16:9",
+                    output_mime_type="image/jpeg"
+                )
+            )
+            
+            if result.generated_images:
+                # Access image bytes based on current GenAI SDK object structure
+                generated_img = result.generated_images[0]
+                img_bytes = generated_img.image_bytes if hasattr(generated_img, "image_bytes") else generated_img.image.image_bytes
+                
+                img_filename = f"gen_{session['user']}_{int(time.time())}.jpg"
+                img_path = os.path.join("static/generated_images", img_filename)
+                os.makedirs("static/generated_images", exist_ok=True)
+                
+                with open(img_path, "wb") as img_file:
+                    img_file.write(img_bytes)
+                
+                # Save assistant response to memory so it stays in history
+                memory["messages"].append({"role": "user", "content": user_input})
+                memory["messages"].append({"role": "assistant", "content": f"![Generated Image](/static/generated_images/{img_filename})"})
+                save_memory(memory)
 
-    # 1. Search happens ONCE here (skipped if image command)
+                @copy_current_request_context
+                def send_image_response():
+                    return Response(f"\n\n![Generated Image](/static/generated_images/{img_filename})\n\n", mimetype='text/markdown')
+                return send_image_response()
+                
+        except Exception as e:
+            print(f"Imagen generation error: {repr(e)}")
+            @copy_current_request_context
+            def send_error_response():
+                return Response(f"\n[Image generation failed: {repr(e)}]", mimetype='text/markdown')
+            return send_error_response()
+
+    # ---------------- STANDARD CHAT LOGIC ---------------- #
+
+    # 1. Search happens ONCE here
     context = None
     try:
-        if not is_image_command and user_input.strip() and should_search(user_input):
+        if user_input.strip() and should_search(user_input):
             context = web_search(user_input)
     except Exception as e:
         print(f"Web search skipped due to error: {e}")
@@ -207,10 +249,9 @@ def chat():
     # 5. Stream the response
     @copy_current_request_context
     def generate_stream():
+        full_response_text = ""
         try:
             config_kwargs = {"system_instruction": memory["system"]}
-            if is_image_command:
-                config_kwargs["response_modalities"] = ["TEXT", "IMAGE"]
 
             response_stream = ai_client.models.generate_content_stream(
                 model=MODEL, 
@@ -219,22 +260,17 @@ def chat():
             )
             for chunk in response_stream:
                 if chunk.text:
+                    full_response_text += chunk.text
                     yield chunk.text
-                if hasattr(chunk, "candidates") and chunk.candidates:
-                    for candidate in chunk.candidates:
-                        if candidate.content and candidate.content.parts:
-                            for part in candidate.content.parts:
-                                if getattr(part, "inline_data", None):
-                                    img_bytes = part.inline_data.data
-                                    img_filename = f"gen_{session['user']}_{int(time.time())}.jpg"
-                                    img_path = os.path.join("static/generated_images", img_filename)
-                                    os.makedirs("static/generated_images", exist_ok=True)
-                                    with open(img_path, "wb") as img_file:
-                                        img_file.write(img_bytes)
-                                    yield f"\n\n![Generated Image](/static/generated_images/{img_filename})\n\n"
+                    
+            # Save final model response to memory
+            if full_response_text:
+                memory["messages"].append({"role": "assistant", "content": full_response_text})
+                save_memory(memory)
+                
         except Exception as e:
             yield f"\n[Chat processing error: {repr(e)}]"
-
+    
     return Response(generate_stream(), mimetype='text/markdown')
 
 if __name__ == "__main__":
