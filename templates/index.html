@@ -174,13 +174,12 @@
             cursor: pointer;
         }
 
-/* Style for images within the assistant's response */
-.chat-message.assistant div.markdown-content img {
-    max-width: 80%;
-    border-radius: 8px;
-    margin: 10px 0;
-    display: block;
-}
+        .chat-message.assistant div.markdown-content img {
+            max-width: 80%;
+            border-radius: 8px;
+            margin: 10px 0;
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -338,7 +337,6 @@
             sendMessage();
         }
 
-        // ── Media State Processing ──
         function imageSelected(input) {
             const file = input.files[0];
             if (!file) return;
@@ -376,7 +374,6 @@
             document.getElementById('preview-media-container').innerHTML = '';
         }
 
-        // ── Sidebar ──
         function renderSidebar() {
             const { chats, projects } = getData();
             const list = document.getElementById('history-list');
@@ -450,7 +447,6 @@
             renderSidebar();
         }
 
-        // ── Context Menu ──
         function openCtxMenu(e, type, id) {
             e.stopPropagation();
             closeCtxMenu();
@@ -493,7 +489,6 @@
             document.getElementById('ctx-menu').style.display = 'none';
         }
 
-        // ── Rename ──
         function startRename() {
             pendingAction = { ...ctxTarget };
             closeCtxMenu();
@@ -529,7 +524,6 @@
             renderSidebar();
         }
 
-        // ── Delete ──
         function startDelete() {
             pendingAction = { ...ctxTarget };
             closeCtxMenu();
@@ -559,7 +553,6 @@
             renderSidebar();
         }
 
-        // ── Move to Project ──
         function openMoveModal() {
             pendingAction = { ...ctxTarget };
             closeCtxMenu();
@@ -604,7 +597,6 @@
             document.getElementById('move-modal').classList.add('show');
         }
 
-        // ── Projects ──
         const PROJECT_EMOJIS = ['📁','🚀','💡','🎯','📚','🔬','💼','🎨','⚡','🌐'];
         function createProject() {
             const name = prompt('Project name:');
@@ -620,7 +612,6 @@
             renderSidebar();
         }
 
-        // ── Chat ──
         function newChat() {
             currentChatId = null;
             const inner = document.getElementById('chat-inner');
@@ -654,7 +645,6 @@
             renderSidebar();
         }
 
-        // ── Messages ──
         function appendMessage(role, text, mediaSrc = null, isVid = false) {
             const welcome = document.getElementById('welcome-screen');
             if (welcome) welcome.remove();
@@ -665,11 +655,15 @@
                 ? `<div class="msg-avatar user-av"><i class="fas fa-user" style="font-size:10px;"></i></div>`
                 : `<div class="msg-avatar ai">A</div>`;
             
-            let formatted = text
-                .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-                .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
-                .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
-                .replace(/\n/g,'<br>');
+            let formatted = text;
+            // Check if text already contains raw HTML tags (like images)
+            if (!text.includes('<img') && !text.includes('<br>')) {
+                formatted = text
+                    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                    .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
+                    .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
+                    .replace(/\n/g,'<br>');
+            }
 
             let mediaHTML = '';
             if (mediaSrc) {
@@ -684,7 +678,6 @@
             inner.appendChild(wrap);
             document.getElementById('chat-box').scrollTop = 99999;
 
-            // Fixed return context reference for live streaming engines
             return wrap.querySelector('.msg-bubble');
         }
 
@@ -712,7 +705,6 @@
             setTimeout(() => el.style.display = 'none', 5000);
         }
 
-        // ── Send ──
         async function sendMessage() {
             if (isLoading) return;
             const text = textarea.value.trim();
@@ -765,7 +757,6 @@
                 const reader = res.body.getReader();
                 const decoder = new TextDecoder();
                 
-                // Track dynamic node payload directly
                 const bubbleElement = appendMessage('assistant', '');
                 let accumulatedData = '';
 
@@ -776,12 +767,14 @@
                     const chunk = decoder.decode(value, { stream: true });
                     accumulatedData += chunk;
                     
-                    // Render raw text updates inside bubble safely
-                    bubbleElement.textContent = accumulatedData;
+                    if (accumulatedData.includes('<img') || accumulatedData.includes('<br>')) {
+                        bubbleElement.innerHTML = accumulatedData;
+                    } else {
+                        bubbleElement.textContent = accumulatedData;
+                    }
                     document.getElementById('chat-box').scrollTop = 99999;
                 }
 
-                // Render compiled rich format translations onto final chunk accumulation
                 if (accumulatedData.trim()) {
                     const d = getData();
                     const c = d.chats.find(x => x.id === currentChatId);
@@ -790,11 +783,15 @@
                         saveData(d); 
                     }
                     
-                    bubbleElement.innerHTML = accumulatedData
-                        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-                        .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
-                        .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
-                        .replace(/\n/g,'<br>');
+                    if (accumulatedData.includes('<img') || accumulatedData.includes('<br>')) {
+                        bubbleElement.innerHTML = accumulatedData;
+                    } else {
+                        bubbleElement.innerHTML = accumulatedData
+                            .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                            .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
+                            .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
+                            .replace(/\n/g,'<br>');
+                    }
 
                     document.getElementById('current-chat-title').textContent = chat.title;
                     renderSidebar();
@@ -811,7 +808,6 @@
             }
         }
         
-        // ── Modals ──
         function closeModal(id) {
             document.getElementById(id).classList.remove('show');
         }
