@@ -1,4 +1,4 @@
-\from flask import Flask, render_template, request, jsonify, session, redirect, send_from_directory, Response, copy_current_request_context
+from flask import Flask, render_template, request, jsonify, session, redirect, send_from_directory, Response, copy_current_request_context
 from flask_cors import CORS
 from flask_session import Session
 from tavily import TavilyClient
@@ -157,13 +157,15 @@ def chat():
                 with open(img_path, "wb") as img_file:
                     img_file.write(img_bytes)
                 
+                img_html = f'<br><img src="/static/generated_images/{img_filename}" alt="Generated Image" style="max-width:100%; border-radius:8px; margin-top:10px;"><br>'
+                
                 memory["messages"].append({"role": "user", "content": user_input})
-                memory["messages"].append({"role": "assistant", "content": f"![Generated Image](/static/generated_images/{img_filename})"})
+                memory["messages"].append({"role": "assistant", "content": img_html})
                 save_memory(memory)
 
                 @copy_current_request_context
                 def send_image_response():
-                    return Response(f"\n\n![Generated Image](/static/generated_images/{img_filename})\n\n", mimetype='text/markdown')
+                    return Response(img_html, mimetype='text/html')
                 return send_image_response()
             else:
                 raise Exception(f"Pollinations did not return an image (Status: {img_response.status_code}, Content-Type: {content_type})")
@@ -172,7 +174,7 @@ def chat():
             print(f"Image generation error: {repr(e)}")
             @copy_current_request_context
             def send_error_response():
-                return Response(f"\n[Image generation failed: {repr(e)}]", mimetype='text/markdown')
+                return Response(f"<br><span style='color:red;'>[Image generation failed: {repr(e)}]</span>", mimetype='text/html')
             return send_error_response()
 
     # ---------------- STANDARD CHAT LOGIC ---------------- #
