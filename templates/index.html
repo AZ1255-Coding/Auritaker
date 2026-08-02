@@ -131,7 +131,6 @@
         .img-upload-btn:hover { color: var(--text); }
         
         .inline-img-preview { display: none; position: absolute; top: -56px; left: 14px; background: #0e1828; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 4px; z-index: 20; height: 46px; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-        .inline-img-preview img, .inline-img-preview video { height: 100%; width: 36px; object-fit: cover; border-radius: 4px; }
         .inline-img-preview button { background: none; border: none; color: var(--danger); cursor: pointer; padding: 0 6px; font-size: 11px; }
 
         #send-btn { width: 36px; height: 36px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border: none; border-radius: 9px; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; transition: all 0.2s; box-shadow: 0 4px 12px rgba(79,142,255,0.3); }
@@ -270,8 +269,8 @@
         <div class="input-area">
             <div class="input-wrap">
                 <div class="inline-img-preview" id="img-preview-box">
-                    <div id="preview-media-container"></div>
-                    <button onclick="removeSelectedImage()"><i class="fas fa-times"></i></button>
+                    <div id="preview-media-container" style="display:flex; gap:6px; height:100%; align-items:center;"></div>
+                    <button onclick="removeSelectedImage()" title="Clear all" style="background:rgba(248,113,113,0.1); border:none; color:#f87171; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:10px;"><i class="fas fa-times"></i></button>
                 </div>
                 <div class="input-box">
                     <input type="file" id="hidden-file-input" accept="image/*,video/mp4,video/webm,video/quicktime" style="display:none;" onchange="imageSelected(this)" multiple>
@@ -291,9 +290,9 @@
         let isLoading = false;
         let ctxTarget = null;
         let pendingAction = null;
-        let selectedFileBlob = null;
-        let selectedFileBase64 = null;
-        let isVideoSelected = false;
+        
+        let selectedFileBlobs = [];
+        let selectedFilePreviews = [];
 
         function getData() {
             return {
@@ -338,37 +337,71 @@
         }
 
         function imageSelected(input) {
-            const file = input.files[0];
-            if (!file) return;
-            selectedFileBlob = file;
-            isVideoSelected = file.type.startsWith('video/');
+            const files = input.files;
+            if (!files || files.length === 0) return;
 
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                selectedFileBase64 = e.target.result;
-                const container = document.getElementById('preview-media-container');
-                container.innerHTML = '';
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                selectedFileBlobs.push(file);
+
+                const reader = new FileReader();
+                reader.onload = (function(f) {
+                    return function(e) {
+                        selectedFilePreviews.push({
+                            src: e.target.result,
+                            isVideo: f.type.startsWith('video/')
+                        });
+                        renderPreviewThumbnails();
+                    };
+                })(file);
+                reader.readAsDataURL(file);
+            }
+        }
+
+        function renderPreviewThumbnails() {
+            const container = document.getElementById('preview-media-container');
+            container.innerHTML = '';
+            
+            selectedFilePreviews.forEach((item, index) => {
+                const wrapper = document.createElement('div');
+                wrapper.style.cssText = 'position:relative; height:100%; display:inline-block;';
                 
-                if (isVideoSelected) {
+                if (item.isVideo) {
                     const videoEl = document.createElement('video');
-                    videoEl.src = selectedFileBase64;
-                    videoEl.muted = true;
-                    videoEl.playsInline = true;
-                    container.appendChild(videoEl);
+                    videoEl.src = item.src;
+                    videoEl.style.cssText = 'height:100%; width:36px; object-fit:cover; border-radius:4px;';
+                    wrapper.appendChild(videoEl);
                 } else {
                     const imgEl = document.createElement('img');
-                    imgEl.src = selectedFileBase64;
-                    container.appendChild(imgEl);
+                    imgEl.src = item.src;
+                    imgEl.style.cssText = 'height:100%; width:36px; object-fit:cover; border-radius:4px;';
+                    wrapper.appendChild(imgEl);
                 }
-                document.getElementById('img-preview-box').style.display = 'flex';
-            };
-            reader.readAsDataURL(file);
+
+                const removeBtn = document.createElement('button');
+                removeBtn.innerHTML = '&times;';
+                removeBtn.style.cssText = 'position:absolute; top:-4px; right:-4px; background:#f87171; color:white; border:none; border-radius:50%; width:14px; height:14px; font-size:9px; cursor:pointer; display:flex; align-items:center; justify-content:center;';
+                removeBtn.onclick = () => removeSingleFile(index);
+                wrapper.appendChild(removeBtn);
+
+                container.appendChild(wrapper);
+            });
+
+            document.getElementById('img-preview-box').style.display = selectedFilePreviews.length > 0 ? 'flex' : 'none';
+        }
+
+        function removeSingleFile(index) {
+            selectedFileBlobs.splice(index, 1);
+            selectedFilePreviews.splice(index, 1);
+            renderPreviewThumbnails();
+            if (selectedFilePreviews.length === 0) {
+                document.getElementById('hidden-file-input').value = '';
+            }
         }
 
         function removeSelectedImage() {
-            selectedFileBlob = null;
-            selectedFileBase64 = null;
-            isVideoSelected = false;
+            selectedFileBlobs = [];
+            selectedFilePreviews = [];
             document.getElementById('hidden-file-input').value = '';
             document.getElementById('img-preview-box').style.display = 'none';
             document.getElementById('preview-media-container').innerHTML = '';
@@ -640,23 +673,23 @@
             document.getElementById('current-chat-title').textContent = chat.title;
             const inner = document.getElementById('chat-inner');
             inner.innerHTML = '';
-            chat.messages.forEach(m => appendMessage(m.role, m.text, m.image, m.isVideo));
+            chat.messages.forEach(m => appendMultiMediaMessage(m.role, m.text, m.media));
             removeSelectedImage();
             renderSidebar();
         }
 
-        function appendMessage(role, text, mediaSrc = null, isVid = false) {
+        function appendMultiMediaMessage(role, text, mediaArray = []) {
             const welcome = document.getElementById('welcome-screen');
             if (welcome) welcome.remove();
             const inner = document.getElementById('chat-inner');
             const wrap = document.createElement('div');
             wrap.className = `message ${role === 'user' ? 'user' : 'ai'}`;
+            
             const avatarHTML = role === 'user'
                 ? `<div class="msg-avatar user-av"><i class="fas fa-user" style="font-size:10px;"></i></div>`
                 : `<div class="msg-avatar ai">A</div>`;
             
             let formatted = text;
-            // Check if text already contains raw HTML tags (like images)
             if (!text.includes('<img') && !text.includes('<br>')) {
                 formatted = text
                     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -666,12 +699,16 @@
             }
 
             let mediaHTML = '';
-            if (mediaSrc) {
-                if (isVid) {
-                    mediaHTML = `<video src="${mediaSrc}" class="msg-attached-vid" controls style="max-width:100%; max-height:250px; border-radius:8px; margin-top:8px; display:block;"></video>`;
-                } else {
-                    mediaHTML = `<img src="${mediaSrc}" class="msg-attached-img" alt="Uploaded Attachment">`;
-                }
+            if (mediaArray && mediaArray.length > 0) {
+                mediaHTML = '<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">';
+                mediaArray.forEach(m => {
+                    if (m.isVideo) {
+                        mediaHTML += `<video src="${m.src}" class="msg-attached-vid" controls style="max-width:140px; max-height:140px; border-radius:6px;"></video>`;
+                    } else {
+                        mediaHTML += `<img src="${m.src}" class="msg-attached-img" style="max-width:140px; max-height:140px; border-radius:6px; object-fit:cover;">`;
+                    }
+                });
+                mediaHTML += '</div>';
             }
 
             wrap.innerHTML = `${avatarHTML}<div class="msg-bubble">${formatted}${mediaHTML}</div>`;
@@ -708,22 +745,21 @@
         async function sendMessage() {
             if (isLoading) return;
             const text = textarea.value.trim();
-            const attachedFile = selectedFileBlob;
-            const attachedMediaSrc = selectedFileBase64;
-            const currentVidState = isVideoSelected;
+            const attachedFiles = [...selectedFileBlobs];
+            const attachedPreviews = [...selectedFilePreviews];
 
-            if (!text && !attachedFile) return;
+            if (!text && attachedFiles.length === 0) return;
             if (!currentChatId) currentChatId = Date.now();
             
-            appendMessage('user', text, attachedMediaSrc, currentVidState);
+            appendMultiMediaMessage('user', text, attachedPreviews);
             
             const data = getData();
             let chat = data.chats.find(c => c.id === currentChatId);
             if (!chat) {
-                chat = { id: currentChatId, title: text ? text.substring(0, 32) : "Media Reference", messages: [], projectId: null };
+                chat = { id: currentChatId, title: text ? text.substring(0, 32) : "Media Collection", messages: [], projectId: null };
                 data.chats.push(chat);
             }
-            chat.messages.push({ role: 'user', text, image: attachedMediaSrc, isVideo: currentVidState });
+            chat.messages.push({ role: 'user', text, media: attachedPreviews });
             saveData(data);
             
             textarea.value = '';
@@ -737,9 +773,10 @@
 
             const formData = new FormData();
             formData.append("message", text);
-            if (attachedFile) {
-                formData.append("file", attachedFile);
-            }
+            
+            attachedFiles.forEach((file) => {
+                formData.append("files", file);
+            });
 
             try {
                 const res = await fetch(BACKEND_URL + '/chat', {
@@ -757,7 +794,7 @@
                 const reader = res.body.getReader();
                 const decoder = new TextDecoder();
                 
-                const bubbleElement = appendMessage('assistant', '');
+                const bubbleElement = appendMultiMediaMessage('assistant', '');
                 let accumulatedData = '';
 
                 while (true) {
@@ -800,7 +837,7 @@
                 }
             } catch (err) {
                 removeTyping();
-                appendMessage('assistant', '❌ Connection error. Is the server running?');
+                appendMultiMediaMessage('assistant', '❌ Connection error. Is the server running?');
                 showError('Connection error: ' + err.message);
             } finally {
                 isLoading = false;
