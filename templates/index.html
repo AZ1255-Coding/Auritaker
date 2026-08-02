@@ -131,6 +131,7 @@
         .img-upload-btn:hover { color: var(--text); }
         
         .inline-img-preview { display: none; position: absolute; top: -56px; left: 14px; background: #0e1828; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 4px; z-index: 20; height: 46px; align-items: center; gap: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+        .inline-img-preview img, .inline-img-preview video { height: 100%; width: 36px; object-fit: cover; border-radius: 4px; }
         .inline-img-preview button { background: none; border: none; color: var(--danger); cursor: pointer; padding: 0 6px; font-size: 11px; }
 
         #send-btn { width: 36px; height: 36px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border: none; border-radius: 9px; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; transition: all 0.2s; box-shadow: 0 4px 12px rgba(79,142,255,0.3); }
@@ -173,12 +174,13 @@
             cursor: pointer;
         }
 
-        .chat-message.assistant div.markdown-content img {
-            max-width: 80%;
-            border-radius: 8px;
-            margin: 10px 0;
-            display: block;
-        }
+/* Style for images within the assistant's response */
+.chat-message.assistant div.markdown-content img {
+    max-width: 80%;
+    border-radius: 8px;
+    margin: 10px 0;
+    display: block;
+}
     </style>
 </head>
 <body>
@@ -269,11 +271,11 @@
         <div class="input-area">
             <div class="input-wrap">
                 <div class="inline-img-preview" id="img-preview-box">
-                    <div id="preview-media-container" style="display:flex; gap:6px; height:100%; align-items:center;"></div>
-                    <button onclick="removeSelectedImage()" title="Clear all" style="background:rgba(248,113,113,0.1); border:none; color:#f87171; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:10px;"><i class="fas fa-times"></i></button>
+                    <div id="preview-media-container"></div>
+                    <button onclick="removeSelectedImage()"><i class="fas fa-times"></i></button>
                 </div>
                 <div class="input-box">
-                    <input type="file" id="hidden-file-input" accept="image/*,video/mp4,video/webm,video/quicktime" style="display:none;" onchange="imageSelected(this)" multiple>
+                    <input type="file" id="hidden-file-input" accept="image/*,video/mp4,video/webm,video/quicktime" style="display:none;" onchange="imageSelected(this)">
                     <button class="img-upload-btn" onclick="document.getElementById('hidden-file-input').click()" title="Upload Media"><i class="fas fa-paperclip"></i></button>
                     <textarea id="user-input" placeholder="Ask anything..." rows="1" autocomplete="off"></textarea>
                     <button id="send-btn" onclick="sendMessage()"><i class="fas fa-arrow-up"></i></button>
@@ -290,9 +292,9 @@
         let isLoading = false;
         let ctxTarget = null;
         let pendingAction = null;
-        
-        let selectedFileBlobs = [];
-        let selectedFilePreviews = [];
+        let selectedFileBlob = null;
+        let selectedFileBase64 = null;
+        let isVideoSelected = false;
 
         function getData() {
             return {
@@ -336,77 +338,45 @@
             sendMessage();
         }
 
+        // ── Media State Processing ──
         function imageSelected(input) {
-            const files = input.files;
-            if (!files || files.length === 0) return;
+            const file = input.files[0];
+            if (!file) return;
+            selectedFileBlob = file;
+            isVideoSelected = file.type.startsWith('video/');
 
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
-                selectedFileBlobs.push(file);
-
-                const reader = new FileReader();
-                reader.onload = (function(f) {
-                    return function(e) {
-                        selectedFilePreviews.push({
-                            src: e.target.result,
-                            isVideo: f.type.startsWith('video/')
-                        });
-                        renderPreviewThumbnails();
-                    };
-                })(file);
-                reader.readAsDataURL(file);
-            }
-        }
-
-        function renderPreviewThumbnails() {
-            const container = document.getElementById('preview-media-container');
-            container.innerHTML = '';
-            
-            selectedFilePreviews.forEach((item, index) => {
-                const wrapper = document.createElement('div');
-                wrapper.style.cssText = 'position:relative; height:100%; display:inline-block;';
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                selectedFileBase64 = e.target.result;
+                const container = document.getElementById('preview-media-container');
+                container.innerHTML = '';
                 
-                if (item.isVideo) {
+                if (isVideoSelected) {
                     const videoEl = document.createElement('video');
-                    videoEl.src = item.src;
-                    videoEl.style.cssText = 'height:100%; width:36px; object-fit:cover; border-radius:4px;';
-                    wrapper.appendChild(videoEl);
+                    videoEl.src = selectedFileBase64;
+                    videoEl.muted = true;
+                    videoEl.playsInline = true;
+                    container.appendChild(videoEl);
                 } else {
                     const imgEl = document.createElement('img');
-                    imgEl.src = item.src;
-                    imgEl.style.cssText = 'height:100%; width:36px; object-fit:cover; border-radius:4px;';
-                    wrapper.appendChild(imgEl);
+                    imgEl.src = selectedFileBase64;
+                    container.appendChild(imgEl);
                 }
-
-                const removeBtn = document.createElement('button');
-                removeBtn.innerHTML = '&times;';
-                removeBtn.style.cssText = 'position:absolute; top:-4px; right:-4px; background:#f87171; color:white; border:none; border-radius:50%; width:14px; height:14px; font-size:9px; cursor:pointer; display:flex; align-items:center; justify-content:center;';
-                removeBtn.onclick = () => removeSingleFile(index);
-                wrapper.appendChild(removeBtn);
-
-                container.appendChild(wrapper);
-            });
-
-            document.getElementById('img-preview-box').style.display = selectedFilePreviews.length > 0 ? 'flex' : 'none';
-        }
-
-        function removeSingleFile(index) {
-            selectedFileBlobs.splice(index, 1);
-            selectedFilePreviews.splice(index, 1);
-            renderPreviewThumbnails();
-            if (selectedFilePreviews.length === 0) {
-                document.getElementById('hidden-file-input').value = '';
-            }
+                document.getElementById('img-preview-box').style.display = 'flex';
+            };
+            reader.readAsDataURL(file);
         }
 
         function removeSelectedImage() {
-            selectedFileBlobs = [];
-            selectedFilePreviews = [];
+            selectedFileBlob = null;
+            selectedFileBase64 = null;
+            isVideoSelected = false;
             document.getElementById('hidden-file-input').value = '';
             document.getElementById('img-preview-box').style.display = 'none';
             document.getElementById('preview-media-container').innerHTML = '';
         }
 
+        // ── Sidebar ──
         function renderSidebar() {
             const { chats, projects } = getData();
             const list = document.getElementById('history-list');
@@ -480,6 +450,7 @@
             renderSidebar();
         }
 
+        // ── Context Menu ──
         function openCtxMenu(e, type, id) {
             e.stopPropagation();
             closeCtxMenu();
@@ -522,6 +493,7 @@
             document.getElementById('ctx-menu').style.display = 'none';
         }
 
+        // ── Rename ──
         function startRename() {
             pendingAction = { ...ctxTarget };
             closeCtxMenu();
@@ -557,6 +529,7 @@
             renderSidebar();
         }
 
+        // ── Delete ──
         function startDelete() {
             pendingAction = { ...ctxTarget };
             closeCtxMenu();
@@ -586,6 +559,7 @@
             renderSidebar();
         }
 
+        // ── Move to Project ──
         function openMoveModal() {
             pendingAction = { ...ctxTarget };
             closeCtxMenu();
@@ -630,6 +604,7 @@
             document.getElementById('move-modal').classList.add('show');
         }
 
+        // ── Projects ──
         const PROJECT_EMOJIS = ['📁','🚀','💡','🎯','📚','🔬','💼','🎨','⚡','🌐'];
         function createProject() {
             const name = prompt('Project name:');
@@ -645,6 +620,7 @@
             renderSidebar();
         }
 
+        // ── Chat ──
         function newChat() {
             currentChatId = null;
             const inner = document.getElementById('chat-inner');
@@ -673,48 +649,42 @@
             document.getElementById('current-chat-title').textContent = chat.title;
             const inner = document.getElementById('chat-inner');
             inner.innerHTML = '';
-            chat.messages.forEach(m => appendMultiMediaMessage(m.role, m.text, m.media));
+            chat.messages.forEach(m => appendMessage(m.role, m.text, m.image, m.isVideo));
             removeSelectedImage();
             renderSidebar();
         }
 
-        function appendMultiMediaMessage(role, text, mediaArray = []) {
+        // ── Messages ──
+        function appendMessage(role, text, mediaSrc = null, isVid = false) {
             const welcome = document.getElementById('welcome-screen');
             if (welcome) welcome.remove();
             const inner = document.getElementById('chat-inner');
             const wrap = document.createElement('div');
             wrap.className = `message ${role === 'user' ? 'user' : 'ai'}`;
-            
             const avatarHTML = role === 'user'
                 ? `<div class="msg-avatar user-av"><i class="fas fa-user" style="font-size:10px;"></i></div>`
                 : `<div class="msg-avatar ai">A</div>`;
             
-            let formatted = text;
-            if (!text.includes('<img') && !text.includes('<br>')) {
-                formatted = text
-                    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-                    .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
-                    .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
-                    .replace(/\n/g,'<br>');
-            }
+            let formatted = text
+                .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
+                .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
+                .replace(/\n/g,'<br>');
 
             let mediaHTML = '';
-            if (mediaArray && mediaArray.length > 0) {
-                mediaHTML = '<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">';
-                mediaArray.forEach(m => {
-                    if (m.isVideo) {
-                        mediaHTML += `<video src="${m.src}" class="msg-attached-vid" controls style="max-width:140px; max-height:140px; border-radius:6px;"></video>`;
-                    } else {
-                        mediaHTML += `<img src="${m.src}" class="msg-attached-img" style="max-width:140px; max-height:140px; border-radius:6px; object-fit:cover;">`;
-                    }
-                });
-                mediaHTML += '</div>';
+            if (mediaSrc) {
+                if (isVid) {
+                    mediaHTML = `<video src="${mediaSrc}" class="msg-attached-vid" controls style="max-width:100%; max-height:250px; border-radius:8px; margin-top:8px; display:block;"></video>`;
+                } else {
+                    mediaHTML = `<img src="${mediaSrc}" class="msg-attached-img" alt="Uploaded Attachment">`;
+                }
             }
 
             wrap.innerHTML = `${avatarHTML}<div class="msg-bubble">${formatted}${mediaHTML}</div>`;
             inner.appendChild(wrap);
             document.getElementById('chat-box').scrollTop = 99999;
 
+            // Fixed return context reference for live streaming engines
             return wrap.querySelector('.msg-bubble');
         }
 
@@ -742,24 +712,26 @@
             setTimeout(() => el.style.display = 'none', 5000);
         }
 
+        // ── Send ──
         async function sendMessage() {
             if (isLoading) return;
             const text = textarea.value.trim();
-            const attachedFiles = [...selectedFileBlobs];
-            const attachedPreviews = [...selectedFilePreviews];
+            const attachedFile = selectedFileBlob;
+            const attachedMediaSrc = selectedFileBase64;
+            const currentVidState = isVideoSelected;
 
-            if (!text && attachedFiles.length === 0) return;
+            if (!text && !attachedFile) return;
             if (!currentChatId) currentChatId = Date.now();
             
-            appendMultiMediaMessage('user', text, attachedPreviews);
+            appendMessage('user', text, attachedMediaSrc, currentVidState);
             
             const data = getData();
             let chat = data.chats.find(c => c.id === currentChatId);
             if (!chat) {
-                chat = { id: currentChatId, title: text ? text.substring(0, 32) : "Media Collection", messages: [], projectId: null };
+                chat = { id: currentChatId, title: text ? text.substring(0, 32) : "Media Reference", messages: [], projectId: null };
                 data.chats.push(chat);
             }
-            chat.messages.push({ role: 'user', text, media: attachedPreviews });
+            chat.messages.push({ role: 'user', text, image: attachedMediaSrc, isVideo: currentVidState });
             saveData(data);
             
             textarea.value = '';
@@ -773,10 +745,9 @@
 
             const formData = new FormData();
             formData.append("message", text);
-            
-            attachedFiles.forEach((file) => {
-                formData.append("files", file);
-            });
+            if (attachedFile) {
+                formData.append("file", attachedFile);
+            }
 
             try {
                 const res = await fetch(BACKEND_URL + '/chat', {
@@ -794,7 +765,8 @@
                 const reader = res.body.getReader();
                 const decoder = new TextDecoder();
                 
-                const bubbleElement = appendMultiMediaMessage('assistant', '');
+                // Track dynamic node payload directly
+                const bubbleElement = appendMessage('assistant', '');
                 let accumulatedData = '';
 
                 while (true) {
@@ -804,14 +776,12 @@
                     const chunk = decoder.decode(value, { stream: true });
                     accumulatedData += chunk;
                     
-                    if (accumulatedData.includes('<img') || accumulatedData.includes('<br>')) {
-                        bubbleElement.innerHTML = accumulatedData;
-                    } else {
-                        bubbleElement.textContent = accumulatedData;
-                    }
+                    // Render raw text updates inside bubble safely
+                    bubbleElement.textContent = accumulatedData;
                     document.getElementById('chat-box').scrollTop = 99999;
                 }
 
+                // Render compiled rich format translations onto final chunk accumulation
                 if (accumulatedData.trim()) {
                     const d = getData();
                     const c = d.chats.find(x => x.id === currentChatId);
@@ -820,15 +790,11 @@
                         saveData(d); 
                     }
                     
-                    if (accumulatedData.includes('<img') || accumulatedData.includes('<br>')) {
-                        bubbleElement.innerHTML = accumulatedData;
-                    } else {
-                        bubbleElement.innerHTML = accumulatedData
-                            .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-                            .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
-                            .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
-                            .replace(/\n/g,'<br>');
-                    }
+                    bubbleElement.innerHTML = accumulatedData
+                        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                        .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
+                        .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
+                        .replace(/\n/g,'<br>');
 
                     document.getElementById('current-chat-title').textContent = chat.title;
                     renderSidebar();
@@ -837,7 +803,7 @@
                 }
             } catch (err) {
                 removeTyping();
-                appendMultiMediaMessage('assistant', '❌ Connection error. Is the server running?');
+                appendMessage('assistant', '❌ Connection error. Is the server running?');
                 showError('Connection error: ' + err.message);
             } finally {
                 isLoading = false;
@@ -845,6 +811,7 @@
             }
         }
         
+        // ── Modals ──
         function closeModal(id) {
             document.getElementById(id).classList.remove('show');
         }
