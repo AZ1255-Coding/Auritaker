@@ -130,6 +130,7 @@ def chat():
 
     raw_message = request.form.get("message", "")
     uploaded_file_obj = request.files.get("file")
+    file_uri_to_store, mime_type_to_store = None, None
     
     memory = get_memory()
     user_input = raw_message
