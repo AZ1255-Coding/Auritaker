@@ -129,7 +129,7 @@ def chat():
     if not ai_client: return jsonify({"response": "Model error"}), 500
 
     raw_message = request.form.get("message", "")
-    uploaded_file_objs = request.files.getlist("files")  # Fixed: use getlist to capture multiple files
+    uploaded_file_obj = request.files.get("file")
     
     memory = get_memory()
     user_input = raw_message
@@ -192,58 +192,51 @@ def chat():
     if context:
         user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
 
-    # 3. File upload logic supporting multiple files
-    attached_files_meta = []
-    if uploaded_file_objs:
+    # 3. File upload logic with processing state check for videos
+    file_uri_to_store, mime_type_to_store = None, None
+    if uploaded_file_obj and uploaded_file_obj.filename:
         temp_dir = os.path.join(os.getcwd(), "temp_uploads")
         os.makedirs(temp_dir, exist_ok=True)
+        temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
         
-        for uploaded_file_obj in uploaded_file_objs:
-            if uploaded_file_obj and uploaded_file_obj.filename:
-                temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
-                try:
-                    uploaded_file_obj.save(temp_path)
-                    print(f"Successfully saved file locally: {temp_path}")
-                    
-                    gemini_file = ai_client.files.upload(file=temp_path)
-                    
-                    if uploaded_file_obj.filename.lower().endswith(('.mp4', '.webm', '.mov', '.wmv', '.quicktime')):
-                        print("Processing video file on Gemini servers...")
-                        while gemini_file.state.name == "PROCESSING":
-                            time.sleep(2)
-                            gemini_file = ai_client.files.get(name=gemini_file.name)
-                        if gemini_file.state.name == "FAILED":
-                            raise Exception("Video processing failed on Gemini server.")
+        try:
+            uploaded_file_obj.save(temp_path)
+            file_size = os.path.getsize(temp_path)
+            print(f"Successfully saved file locally: {temp_path}, Size: {file_size} bytes")
+            
+            gemini_file = ai_client.files.upload(file=temp_path)
+            
+            if uploaded_file_obj.filename.lower().endswith(('.mp4', '.webm', '.mov', '.wmv', '.quicktime')):
+                print("Processing video file on Gemini servers...")
+                while gemini_file.state.name == "PROCESSING":
+                    time.sleep(2)
+                    gemini_file = ai_client.files.get(name=gemini_file.name)
+                if gemini_file.state.name == "FAILED":
+                    raise Exception("Video processing failed on Gemini server.")
 
-                    attached_files_meta.append({
-                        "file_uri": gemini_file.uri,
-                        "mime_type": gemini_file.mime_type
-                    })
-                    print(f"Successfully uploaded to Gemini API: {gemini_file.uri}")
-                except Exception as e:
-                    print(f"CRITICAL FILE UPLOAD ERROR for {uploaded_file_obj.filename}: {repr(e)}")
-                finally:
-                    if os.path.exists(temp_path): 
-                        os.remove(temp_path)
+            file_uri_to_store, mime_type_to_store = gemini_file.uri, gemini_file.mime_type
+            print(f"Successfully uploaded to Gemini API: {file_uri_to_store} ({mime_type_to_store})")
+        except Exception as e:
+            print(f"CRITICAL FILE UPLOAD ERROR: {repr(e)}")
+        finally:
+            if os.path.exists(temp_path): 
+                os.remove(temp_path)
 
     memory["messages"].append({
         "role": "user", 
         "content": user_input, 
-        "files": attached_files_meta
+        "file_uri": file_uri_to_store, 
+        "mime_type": mime_type_to_store
     })
     recent = memory["messages"][-10:]
     
-    # 4. Build contents list supporting multiple files per message
+    # 4. Build contents list
     contents = []
     for msg in recent:
         parts = []
         if msg.get("content"):
             parts.append(types.Part.from_text(text=msg["content"]))
-            
-        if msg.get("files"):
-            for f_meta in msg["files"]:
-                parts.append(types.Part.from_uri(file_uri=f_meta["file_uri"], mime_type=f_meta["mime_type"]))
-        elif msg.get("file_uri"): # Backward compatibility fallback
+        if msg.get("file_uri"):
             parts.append(types.Part.from_uri(file_uri=msg.get("file_uri"), mime_type=msg.get("mime_type")))
         
         if parts:
@@ -275,6 +268,6 @@ def chat():
             yield f"\n[Chat processing error: {repr(e)}]"
     
     return Response(generate_stream(), mimetype='text/markdown')
-    
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 1010)))
