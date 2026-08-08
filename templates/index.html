@@ -275,7 +275,7 @@
                     <button onclick="removeSelectedImage()"><i class="fas fa-times"></i></button>
                 </div>
                 <div class="input-box">
-                    <input type="file" id="hidden-file-input" accept="image/*,video/mp4,video/webm,video/quicktime" style="display:none;" onchange="imageSelected(this)">
+                    <input type="file" id="hidden-file-input" accept="image/*,video/mp4,video/webm,video/quicktime" style="display:none;" onchange="imageSelected(this)" multiple>
                     <button class="img-upload-btn" onclick="document.getElementById('hidden-file-input').click()" title="Upload Media"><i class="fas fa-paperclip"></i></button>
                     <textarea id="user-input" placeholder="Ask anything..." rows="1" autocomplete="off"></textarea>
                     <button id="send-btn" onclick="sendMessage()"><i class="fas fa-arrow-up"></i></button>
