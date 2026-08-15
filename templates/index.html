@@ -287,545 +287,549 @@
     </main>
 
     <script>
-        const BACKEND_URL = 'https://auritaker.onrender.com';
-        let currentChatId = null;
-        let isLoading = false;
-        let ctxTarget = null;
-        let pendingAction = null;
-        let selectedFileBlob = null;
-        let selectedFileBase64 = null;
-        let isVideoSelected = false;
+    const BACKEND_URL = 'https://auritaker.onrender.com';
+    let currentChatId = null;
+    let isLoading = false;
+    let ctxTarget = null;
+    let pendingAction = null;
+    let selectedFiles = [];
 
-        function getData() {
-            return {
-                chats: JSON.parse(localStorage.getItem('auri_chats') || '[]'),
-                projects: JSON.parse(localStorage.getItem('auri_projects') || '[]')
-            };
+    function getData() {
+        return {
+            chats: JSON.parse(localStorage.getItem('auri_chats') || '[]'),
+            projects: JSON.parse(localStorage.getItem('auri_projects') || '[]')
+        };
+    }
+
+    function saveData(data) {
+        localStorage.setItem('auri_chats', JSON.stringify(data.chats));
+        localStorage.setItem('auri_projects', JSON.stringify(data.projects));
+    }
+
+    const email = localStorage.getItem('auritaker_user');
+    if (email) document.getElementById('user-email').innerText = email;
+    renderSidebar();
+
+    const textarea = document.getElementById('user-input');
+    textarea.addEventListener('input', () => {
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 160) + 'px';
+    });
+    textarea.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) { 
+            e.preventDefault(); 
+            sendMessage(); 
         }
-        function saveData(data) {
-            localStorage.setItem('auri_chats', JSON.stringify(data.chats));
-            localStorage.setItem('auri_projects', JSON.stringify(data.projects));
-        }
+    });
 
-        const email = localStorage.getItem('auritaker_user');
-        if (email) document.getElementById('user-email').innerText = email;
-        renderSidebar();
+    function toggleSidebar() {
+        document.getElementById('sidebar').classList.toggle('open');
+        document.getElementById('overlay').classList.toggle('show');
+    }
 
-        const textarea = document.getElementById('user-input');
-        textarea.addEventListener('input', () => {
-            textarea.style.height = 'auto';
-            textarea.style.height = Math.min(textarea.scrollHeight, 160) + 'px';
-        });
-        textarea.addEventListener('keydown', e => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-        });
+    function logout() {
+        fetch(BACKEND_URL + '/logout', { credentials: 'include' });
+        localStorage.removeItem('auritaker_logged_in');
+        localStorage.removeItem('auritaker_user');
+        window.location.href = BACKEND_URL + '/login';
+    }
 
-        function toggleSidebar() {
-            document.getElementById('sidebar').classList.toggle('open');
-            document.getElementById('overlay').classList.toggle('show');
-        }
+    function useSuggestion(el) {
+        textarea.value = el.querySelector('.suggestion-text').innerText;
+        textarea.dispatchEvent(new Event('input'));
+        sendMessage();
+    }
 
-        function logout() {
-            fetch(BACKEND_URL + '/logout', { credentials: 'include' });
-            localStorage.removeItem('auritaker_logged_in');
-            localStorage.removeItem('auritaker_user');
-            window.location.href = BACKEND_URL + '/login';
-        }
-
-        function useSuggestion(el) {
-            textarea.value = el.querySelector('.suggestion-text').innerText;
-            textarea.dispatchEvent(new Event('input'));
-            sendMessage();
-        }
-
-        // ── Media State Processing ──
-        function imageSelected(input) {
-            const file = input.files[0];
-            if (!file) return;
-            selectedFileBlob = file;
-            isVideoSelected = file.type.startsWith('video/');
-
+    // ── Media State Processing ──
+    function imageSelected(input) {
+        const files = Array.from(input.files);
+        if (files.length === 0) return;
+        
+        selectedFiles = files;
+        const container = document.getElementById('preview-media-container');
+        container.innerHTML = '';
+        
+        selectedFiles.forEach((file) => {
             const reader = new FileReader();
+            reader.readAsDataURL(file);
             reader.onload = function(e) {
-                selectedFileBase64 = e.target.result;
-                const container = document.getElementById('preview-media-container');
-                container.innerHTML = '';
+                const isVid = file.type.startsWith('video/');
+                const thumbWrap = document.createElement('div');
+                thumbWrap.style.cssText = 'position:relative; display:inline-block; height:100%; margin-right:4px;';
                 
-                if (isVideoSelected) {
+                if (isVid) {
                     const videoEl = document.createElement('video');
-                    videoEl.src = selectedFileBase64;
-                    videoEl.muted = true;
-                    videoEl.playsInline = true;
-                    container.appendChild(videoEl);
+                    videoEl.src = e.target.result;
+                    videoEl.style.cssText = 'height:100%; width:36px; object-fit:cover; border-radius:4px;';
+                    thumbWrap.appendChild(videoEl);
                 } else {
                     const imgEl = document.createElement('img');
-                    imgEl.src = selectedFileBase64;
-                    container.appendChild(imgEl);
+                    imgEl.src = e.target.result;
+                    imgEl.style.cssText = 'height:100%; width:36px; object-fit:cover; border-radius:4px;';
+                    thumbWrap.appendChild(imgEl);
                 }
-                document.getElementById('img-preview-box').style.display = 'flex';
+                container.appendChild(thumbWrap);
             };
-            reader.readAsDataURL(file);
+        });
+        
+        document.getElementById('img-preview-box').style.display = 'flex';
+    }
+
+    function removeSelectedImage() {
+        selectedFiles = [];
+        document.getElementById('hidden-file-input').value = '';
+        document.getElementById('img-preview-box').style.display = 'none';
+        document.getElementById('preview-media-container').innerHTML = '';
+    }
+
+    // ── Sidebar ──
+    function renderSidebar() {
+        const { chats, projects } = getData();
+        const list = document.getElementById('history-list');
+        list.innerHTML = '';
+
+        if (projects.length > 0) {
+            const projLabel = document.createElement('div');
+            projLabel.className = 'section-label';
+            projLabel.textContent = 'Projects';
+            list.appendChild(projLabel);
+
+            projects.forEach(proj => {
+                const projChats = chats.filter(c => c.projectId === proj.id);
+                const group = document.createElement('div');
+                group.className = 'project-group' + (proj.open ? ' open' : '');
+                group.innerHTML = `
+                    <div class="project-header" onclick="toggleProject(${proj.id})">
+                        <i class="fas fa-chevron-right project-chevron"></i>
+                        <span class="project-icon">${proj.emoji || '📁'}</span>
+                        <span class="project-name">${proj.name}</span>
+                        <span class="project-count">${projChats.length}</span>
+                        <button class="item-menu-btn" onclick="openCtxMenu(event,'project',${proj.id})">
+                            <i class="fas fa-ellipsis"></i>
+                        </button>
+                    </div>
+                    <div class="project-chats" id="proj-chats-${proj.id}"></div>
+                `;
+                list.appendChild(group);
+                const chatContainer = group.querySelector('.project-chats');
+                projChats.forEach(chat => chatContainer.appendChild(makeChatItem(chat)));
+            });
         }
 
-        function removeSelectedImage() {
-            selectedFileBlob = null;
-            selectedFileBase64 = null;
-            isVideoSelected = false;
-            document.getElementById('hidden-file-input').value = '';
-            document.getElementById('img-preview-box').style.display = 'none';
-            document.getElementById('preview-media-container').innerHTML = '';
+        const freeChats = chats.filter(c => !c.projectId);
+        if (freeChats.length > 0) {
+            const chatLabel = document.createElement('div');
+            chatLabel.className = 'section-label';
+            chatLabel.textContent = projects.length > 0 ? 'Other Chats' : 'Recent';
+            list.appendChild(chatLabel);
+            freeChats.slice().reverse().forEach(chat => list.appendChild(makeChatItem(chat)));
         }
 
-        // ── Sidebar ──
-        function renderSidebar() {
-            const { chats, projects } = getData();
-            const list = document.getElementById('history-list');
-            list.innerHTML = '';
-
-            if (projects.length > 0) {
-                const projLabel = document.createElement('div');
-                projLabel.className = 'section-label';
-                projLabel.textContent = 'Projects';
-                list.appendChild(projLabel);
-
-                projects.forEach(proj => {
-                    const projChats = chats.filter(c => c.projectId === proj.id);
-                    const group = document.createElement('div');
-                    group.className = 'project-group' + (proj.open ? ' open' : '');
-                    group.innerHTML = `
-                        <div class="project-header" onclick="toggleProject(${proj.id})">
-                            <i class="fas fa-chevron-right project-chevron"></i>
-                            <span class="project-icon">${proj.emoji || '📁'}</span>
-                            <span class="project-name">${proj.name}</span>
-                            <span class="project-count">${projChats.length}</span>
-                            <button class="item-menu-btn" onclick="openCtxMenu(event,'project',${proj.id})">
-                                <i class="fas fa-ellipsis"></i>
-                            </button>
-                        </div>
-                        <div class="project-chats" id="proj-chats-${proj.id}"></div>
-                    `;
-                    list.appendChild(group);
-                    const chatContainer = group.querySelector('.project-chats');
-                    projChats.forEach(chat => chatContainer.appendChild(makeChatItem(chat)));
-                });
-            }
-
-            const freeChats = chats.filter(c => !c.projectId);
-            if (freeChats.length > 0) {
-                const chatLabel = document.createElement('div');
-                chatLabel.className = 'section-label';
-                chatLabel.textContent = projects.length > 0 ? 'Other Chats' : 'Recent';
-                list.appendChild(chatLabel);
-                freeChats.slice().reverse().forEach(chat => list.appendChild(makeChatItem(chat)));
-            }
-
-            if (chats.length === 0 && projects.length === 0) {
-                list.innerHTML = '<p style="font-size:12px;color:#2d3d5a;padding:12px 10px;">No chats yet</p>';
-            }
+        if (chats.length === 0 && projects.length === 0) {
+            list.innerHTML = '<p style="font-size:12px;color:#2d3d5a;padding:12px 10px;">No chats yet</p>';
         }
+    }
 
-        function makeChatItem(chat) {
-            const div = document.createElement('div');
-            div.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
-            div.innerHTML = `
-                <i class="fas fa-message chat-icon"></i>
-                <span class="chat-title">${chat.title}</span>
-                <button class="item-menu-btn" onclick="openCtxMenu(event,'chat',${chat.id})">
-                    <i class="fas fa-ellipsis"></i>
-                </button>
+    function makeChatItem(chat) {
+        const div = document.createElement('div');
+        div.className = `chat-item ${chat.id === currentChatId ? 'active' : ''}`;
+        div.innerHTML = `
+            <i class="fas fa-message chat-icon"></i>
+            <span class="chat-title">${chat.title}</span>
+            <button class="item-menu-btn" onclick="openCtxMenu(event,'chat',${chat.id})">
+                <i class="fas fa-ellipsis"></i>
+            </button>
+        `;
+        div.onclick = e => {
+            if (e.target.closest('.item-menu-btn')) return;
+            loadChat(chat.id);
+            if (window.innerWidth < 768) toggleSidebar();
+        };
+        return div;
+    }
+
+    function toggleProject(id) {
+        const data = getData();
+        const proj = data.projects.find(p => p.id === id);
+        if (proj) proj.open = !proj.open;
+        saveData(data);
+        renderSidebar();
+    }
+
+    // ── Context Menu ──
+    function openCtxMenu(e, type, id) {
+        e.stopPropagation();
+        closeCtxMenu();
+        ctxTarget = { type, id };
+
+        const menu = document.getElementById('ctx-menu');
+        const { projects } = getData();
+        let items = '';
+
+        if (type === 'chat') {
+            items = `
+                <div class="ctx-item" onclick="startRename()"><i class="fas fa-pen"></i> Rename</div>
+                ${projects.length > 0 ? `<div class="ctx-item" onclick="openMoveModal()"><i class="fas fa-folder-arrow-up"></i> Move to Project</div>` : ''}
+                <div class="ctx-divider"></div>
+                <div class="ctx-item danger" onclick="startDelete()"><i class="fas fa-trash"></i> Delete</div>
             `;
-            div.onclick = e => {
-                if (e.target.closest('.item-menu-btn')) return;
-                loadChat(chat.id);
-                if (window.innerWidth < 768) toggleSidebar();
-            };
-            return div;
+        } else {
+            items = `
+                <div class="ctx-item" onclick="startRename()"><i class="fas fa-pen"></i> Rename</div>
+                <div class="ctx-divider"></div>
+                <div class="ctx-item danger" onclick="startDelete()"><i class="fas fa-trash"></i> Delete Project</div>
+            `;
         }
 
-        function toggleProject(id) {
-            const data = getData();
-            const proj = data.projects.find(p => p.id === id);
-            if (proj) proj.open = !proj.open;
-            saveData(data);
-            renderSidebar();
-        }
+        menu.innerHTML = items;
+        menu.style.display = 'block';
 
-        // ── Context Menu ──
-        function openCtxMenu(e, type, id) {
-            e.stopPropagation();
-            closeCtxMenu();
-            ctxTarget = { type, id };
+        const rect = e.target.closest('.item-menu-btn').getBoundingClientRect();
+        let x = rect.right + 4;
+        let y = rect.top;
+        if (x + 170 > window.innerWidth) x = rect.left - 174;
+        if (y + 150 > window.innerHeight) y = window.innerHeight - 160;
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
 
-            const menu = document.getElementById('ctx-menu');
-            const { projects } = getData();
-            let items = '';
+        setTimeout(() => document.addEventListener('click', closeCtxMenu, { once: true }), 0);
+    }
 
-            if (type === 'chat') {
-                items = `
-                    <div class="ctx-item" onclick="startRename()"><i class="fas fa-pen"></i> Rename</div>
-                    ${projects.length > 0 ? `<div class="ctx-item" onclick="openMoveModal()"><i class="fas fa-folder-arrow-up"></i> Move to Project</div>` : ''}
-                    <div class="ctx-divider"></div>
-                    <div class="ctx-item danger" onclick="startDelete()"><i class="fas fa-trash"></i> Delete</div>
-                `;
-            } else {
-                items = `
-                    <div class="ctx-item" onclick="startRename()"><i class="fas fa-pen"></i> Rename</div>
-                    <div class="ctx-divider"></div>
-                    <div class="ctx-item danger" onclick="startDelete()"><i class="fas fa-trash"></i> Delete Project</div>
-                `;
+    function closeCtxMenu() {
+        document.getElementById('ctx-menu').style.display = 'none';
+    }
+
+    // ── Rename ──
+    function startRename() {
+        pendingAction = { ...ctxTarget };
+        closeCtxMenu();
+        const { chats, projects } = getData();
+        const isProject = pendingAction.type === 'project';
+        const item = isProject
+            ? projects.find(p => p.id === pendingAction.id)
+            : chats.find(c => c.id === pendingAction.id);
+        if (!item) return;
+        document.getElementById('rename-modal-title').textContent = isProject ? 'Rename Project' : 'Rename Chat';
+        document.getElementById('rename-modal-sub').textContent = isProject ? 'Enter a new project name' : 'Enter a new chat name';
+        document.getElementById('rename-input').value = item.name || item.title;
+        document.getElementById('rename-modal').classList.add('show');
+        document.getElementById('rename-input').focus();
+    }
+
+    function confirmRename() {
+        const val = document.getElementById('rename-input').value.trim();
+        if (!val) return;
+        const data = getData();
+        if (pendingAction.type === 'project') {
+            const proj = data.projects.find(p => p.id === pendingAction.id);
+            if (proj) proj.name = val;
+        } else {
+            const chat = data.chats.find(c => c.id === pendingAction.id);
+            if (chat) {
+                chat.title = val;
+                if (chat.id === currentChatId) document.getElementById('current-chat-title').textContent = val;
             }
-
-            menu.innerHTML = items;
-            menu.style.display = 'block';
-
-            const rect = e.target.closest('.item-menu-btn').getBoundingClientRect();
-            let x = rect.right + 4;
-            let y = rect.top;
-            if (x + 170 > window.innerWidth) x = rect.left - 174;
-            if (y + 150 > window.innerHeight) y = window.innerHeight - 160;
-            menu.style.left = x + 'px';
-            menu.style.top = y + 'px';
-
-            setTimeout(() => document.addEventListener('click', closeCtxMenu, { once: true }), 0);
         }
+        saveData(data);
+        closeModal('rename-modal');
+        renderSidebar();
+    }
 
-        function closeCtxMenu() {
-            document.getElementById('ctx-menu').style.display = 'none';
+    // ── Delete ──
+    function startDelete() {
+        pendingAction = { ...ctxTarget };
+        closeCtxMenu();
+        const { chats, projects } = getData();
+        const isProject = pendingAction.type === 'project';
+        const item = isProject
+            ? projects.find(p => p.id === pendingAction.id)
+            : chats.find(c => c.id === pendingAction.id);
+        if (!item) return;
+        document.getElementById('delete-modal-msg').textContent = isProject
+            ? `Delete project "${item.name}"? Chats inside will become unorganized.`
+            : `Delete "${item.title}"? This cannot be undone.`;
+        document.getElementById('delete-modal').classList.add('show');
+    }
+
+    function confirmDelete() {
+        const data = getData();
+        if (pendingAction.type === 'project') {
+            data.chats.forEach(c => { if (c.projectId === pendingAction.id) c.projectId = null; });
+            data.projects = data.projects.filter(p => p.id !== pendingAction.id);
+        } else {
+            data.chats = data.chats.filter(c => c.id !== pendingAction.id);
+            if (pendingAction.id === currentChatId) newChat();
         }
+        saveData(data);
+        closeModal('delete-modal');
+        renderSidebar();
+    }
 
-        // ── Rename ──
-        function startRename() {
-            pendingAction = { ...ctxTarget };
-            closeCtxMenu();
-            const { chats, projects } = getData();
-            const isProject = pendingAction.type === 'project';
-            const item = isProject
-                ? projects.find(p => p.id === pendingAction.id)
-                : chats.find(c => c.id === pendingAction.id);
-            if (!item) return;
-            document.getElementById('rename-modal-title').textContent = isProject ? 'Rename Project' : 'Rename Chat';
-            document.getElementById('rename-modal-sub').textContent = isProject ? 'Enter a new project name' : 'Enter a new chat name';
-            document.getElementById('rename-input').value = item.name || item.title;
-            document.getElementById('rename-modal').classList.add('show');
-            document.getElementById('rename-input').focus();
-        }
+    // ── Move to Project ──
+    function openMoveModal() {
+        pendingAction = { ...ctxTarget };
+        closeCtxMenu();
+        const { projects } = getData();
+        const container = document.getElementById('move-project-list');
+        container.innerHTML = '';
 
-        function confirmRename() {
-            const val = document.getElementById('rename-input').value.trim();
-            if (!val) return;
-            const data = getData();
-            if (pendingAction.type === 'project') {
-                const proj = data.projects.find(p => p.id === pendingAction.id);
-                if (proj) proj.name = val;
-            } else {
-                const chat = data.chats.find(c => c.id === pendingAction.id);
-                if (chat) {
-                    chat.title = val;
-                    if (chat.id === currentChatId) document.getElementById('current-chat-title').textContent = val;
-                }
-            }
-            saveData(data);
-            closeModal('rename-modal');
-            renderSidebar();
-        }
-
-        // ── Delete ──
-        function startDelete() {
-            pendingAction = { ...ctxTarget };
-            closeCtxMenu();
-            const { chats, projects } = getData();
-            const isProject = pendingAction.type === 'project';
-            const item = isProject
-                ? projects.find(p => p.id === pendingAction.id)
-                : chats.find(c => c.id === pendingAction.id);
-            if (!item) return;
-            document.getElementById('delete-modal-msg').textContent = isProject
-                ? `Delete project "${item.name}"? Chats inside will become unorganized.`
-                : `Delete "${item.title}"? This cannot be undone.`;
-            document.getElementById('delete-modal').classList.add('show');
-        }
-
-        function confirmDelete() {
-            const data = getData();
-            if (pendingAction.type === 'project') {
-                data.chats.forEach(c => { if (c.projectId === pendingAction.id) c.projectId = null; });
-                data.projects = data.projects.filter(p => p.id !== pendingAction.id);
-            } else {
-                data.chats = data.chats.filter(c => c.id !== pendingAction.id);
-                if (pendingAction.id === currentChatId) newChat();
-            }
-            saveData(data);
-            closeModal('delete-modal');
-            renderSidebar();
-        }
-
-        // ── Move to Project ──
-        function openMoveModal() {
-            pendingAction = { ...ctxTarget };
-            closeCtxMenu();
-            const { projects } = getData();
-            const container = document.getElementById('move-project-list');
-            container.innerHTML = '';
-
-            if (projects.length === 0) {
-                container.innerHTML = '<p style="font-size:12px;color:#4a5568;">No projects yet. Create one first.</p>';
-            } else {
-                projects.forEach(proj => {
-                    const btn = document.createElement('button');
-                    btn.style.cssText = 'width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:10px 12px;cursor:pointer;text-align:left;color:#8899bb;font-size:13px;font-family:DM Sans,sans-serif;margin-bottom:6px;transition:all 0.15s;display:flex;align-items:center;gap:8px;';
-                    btn.innerHTML = `<span>${proj.emoji || '📁'}</span> <span>${proj.name}</span>`;
-                    btn.onmouseover = () => btn.style.background = 'rgba(79,142,255,0.1)';
-                    btn.onmouseout = () => btn.style.background = 'rgba(255,255,255,0.04)';
-                    btn.onclick = () => {
-                        const data = getData();
-                        const chat = data.chats.find(c => c.id === pendingAction.id);
-                        if (chat) chat.projectId = proj.id;
-                        saveData(data);
-                        closeModal('move-modal');
-                        renderSidebar();
-                    };
-                    container.appendChild(btn);
-                });
-
-                const removeBtn = document.createElement('button');
-                removeBtn.style.cssText = 'width:100%;background:none;border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:10px 12px;cursor:pointer;text-align:left;color:#4a5568;font-size:12px;font-family:DM Sans,sans-serif;margin-top:4px;';
-                removeBtn.textContent = '✕ Remove from project';
-                removeBtn.onclick = () => {
+        if (projects.length === 0) {
+            container.innerHTML = '<p style="font-size:12px;color:#4a5568;">No projects yet. Create one first.</p>';
+        } else {
+            projects.forEach(proj => {
+                const btn = document.createElement('button');
+                btn.style.cssText = 'width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:10px 12px;cursor:pointer;text-align:left;color:#8899bb;font-size:13px;font-family:DM Sans,sans-serif;margin-bottom:6px;transition:all 0.15s;display:flex;align-items:center;gap:8px;';
+                btn.innerHTML = `<span>${proj.emoji || '📁'}</span> <span>${proj.name}</span>`;
+                btn.onmouseover = () => btn.style.background = 'rgba(79,142,255,0.1)';
+                btn.onmouseout = () => btn.style.background = 'rgba(255,255,255,0.04)';
+                btn.onclick = () => {
                     const data = getData();
                     const chat = data.chats.find(c => c.id === pendingAction.id);
-                    if (chat) chat.projectId = null;
+                    if (chat) chat.projectId = proj.id;
                     saveData(data);
                     closeModal('move-modal');
                     renderSidebar();
                 };
-                container.appendChild(removeBtn);
-            }
-
-            document.getElementById('move-modal').classList.add('show');
-        }
-
-        // ── Projects ──
-        const PROJECT_EMOJIS = ['📁','🚀','💡','🎯','📚','🔬','💼','🎨','⚡','🌐'];
-        function createProject() {
-            const name = prompt('Project name:');
-            if (!name || !name.trim()) return;
-            const data = getData();
-            data.projects.push({
-                id: Date.now(),
-                name: name.trim(),
-                emoji: PROJECT_EMOJIS[Math.floor(Math.random() * PROJECT_EMOJIS.length)],
-                open: true
+                container.appendChild(btn);
             });
-            saveData(data);
-            renderSidebar();
+
+            const removeBtn = document.createElement('button');
+            removeBtn.style.cssText = 'width:100%;background:none;border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:10px 12px;cursor:pointer;text-align:left;color:#4a5568;font-size:12px;font-family:DM Sans,sans-serif;margin-top:4px;';
+            removeBtn.textContent = '✕ Remove from project';
+            removeBtn.onclick = () => {
+                const data = getData();
+                const chat = data.chats.find(c => c.id === pendingAction.id);
+                if (chat) chat.projectId = null;
+                saveData(data);
+                closeModal('move-modal');
+                renderSidebar();
+            };
+            container.appendChild(removeBtn);
         }
 
-        // ── Chat ──
-        function newChat() {
-            currentChatId = null;
-            const inner = document.getElementById('chat-inner');
-            inner.innerHTML = `
-                <div class="welcome" id="welcome-screen">
-                    <div class="welcome-icon">⚡</div>
-                    <h2>What's on your mind?</h2>
-                    <p>Ask me anything — I search the web when needed.</p>
-                    <div class="suggestion-grid">
-                        <button class="suggestion" onclick="useSuggestion(this)"><div class="suggestion-icon">🏏</div><div class="suggestion-text">What's the main sport talk in cricket today?</div></button>
-                        <button class="suggestion" onclick="useSuggestion(this)"><div class="suggestion-icon">⚽</div><div class="suggestion-text">Latest football transfer news</div></button>
-                        <button class="suggestion" onclick="useSuggestion(this)"><div class="suggestion-icon">🏀</div><div class="suggestion-text">NBA scores from last night</div></button>
-                        <button class="suggestion" onclick="useSuggestion(this)"><div class="suggestion-icon">🎾</div><div class="suggestion-text">Who won the latest Grand Slam?</div></button>
-                    </div>
-                </div>`;
-            document.getElementById('current-chat-title').textContent = 'Auritaker AI';
-            removeSelectedImage();
-            renderSidebar();
-        }
+        document.getElementById('move-modal').classList.add('show');
+    }
 
-        function loadChat(id) {
-            currentChatId = id;
-            const { chats } = getData();
-            const chat = chats.find(c => c.id === id);
-            if (!chat) return;
-            document.getElementById('current-chat-title').textContent = chat.title;
-            const inner = document.getElementById('chat-inner');
-            inner.innerHTML = '';
-            chat.messages.forEach(m => appendMessage(m.role, m.text, m.image, m.isVideo));
-            removeSelectedImage();
-            renderSidebar();
-        }
+    // ── Projects ──
+    const PROJECT_EMOJIS = ['📁','🚀','💡','🎯','📚','🔬','💼','🎨','⚡','🌐'];
+    function createProject() {
+        const name = prompt('Project name:');
+        if (!name || !name.trim()) return;
+        const data = getData();
+        data.projects.push({
+            id: Date.now(),
+            name: name.trim(),
+            emoji: PROJECT_EMOJIS[Math.floor(Math.random() * PROJECT_EMOJIS.length)],
+            open: true
+        });
+        saveData(data);
+        renderSidebar();
+    }
 
-        // ── Messages ──
-        function appendMessage(role, text, mediaSrc = null, isVid = false) {
-            const welcome = document.getElementById('welcome-screen');
-            if (welcome) welcome.remove();
-            const inner = document.getElementById('chat-inner');
-            const wrap = document.createElement('div');
-            wrap.className = `message ${role === 'user' ? 'user' : 'ai'}`;
-            const avatarHTML = role === 'user'
-                ? `<div class="msg-avatar user-av"><i class="fas fa-user" style="font-size:10px;"></i></div>`
-                : `<div class="msg-avatar ai">A</div>`;
-            
-            let formatted = text
-                .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-                .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
-                .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
-                .replace(/\n/g,'<br>');
+    // ── Chat ──
+    function newChat() {
+        currentChatId = null;
+        const inner = document.getElementById('chat-inner');
+        inner.innerHTML = `
+            <div class="welcome" id="welcome-screen">
+                <div class="welcome-icon">⚡</div>
+                <h2>What's on your mind?</h2>
+                <p>Ask me anything — I search the web when needed.</p>
+                <div class="suggestion-grid">
+                    <button class="suggestion" onclick="useSuggestion(this)"><div class="suggestion-icon">🏏</div><div class="suggestion-text">What's the main sport talk in cricket today?</div></button>
+                    <button class="suggestion" onclick="useSuggestion(this)"><div class="suggestion-icon">⚽</div><div class="suggestion-text">Latest football transfer news</div></button>
+                    <button class="suggestion" onclick="useSuggestion(this)"><div class="suggestion-icon">🏀</div><div class="suggestion-text">NBA scores from last night</div></button>
+                    <button class="suggestion" onclick="useSuggestion(this)"><div class="suggestion-icon">🎾</div><div class="suggestion-text">Who won the latest Grand Slam?</div></button>
+                </div>
+            </div>`;
+        document.getElementById('current-chat-title').textContent = 'Auritaker AI';
+        removeSelectedImage();
+        renderSidebar();
+    }
 
-            let mediaHTML = '';
-            if (mediaSrc) {
-                if (isVid) {
-                    mediaHTML = `<video src="${mediaSrc}" class="msg-attached-vid" controls style="max-width:100%; max-height:250px; border-radius:8px; margin-top:8px; display:block;"></video>`;
-                } else {
-                    mediaHTML = `<img src="${mediaSrc}" class="msg-attached-img" alt="Uploaded Attachment">`;
-                }
-            }
+    function loadChat(id) {
+        currentChatId = id;
+        const { chats } = getData();
+        const chat = chats.find(c => c.id === id);
+        if (!chat) return;
+        document.getElementById('current-chat-title').textContent = chat.title;
+        const inner = document.getElementById('chat-inner');
+        inner.innerHTML = '';
+        chat.messages.forEach(m => appendMessage(m.role, m.text, m.image, m.isVideo));
+        removeSelectedImage();
+        renderSidebar();
+    }
 
-            wrap.innerHTML = `${avatarHTML}<div class="msg-bubble">${formatted}${mediaHTML}</div>`;
-            inner.appendChild(wrap);
-            document.getElementById('chat-box').scrollTop = 99999;
-
-            // Fixed return context reference for live streaming engines
-            return wrap.querySelector('.msg-bubble');
-        }
-
-        function showTyping() {
-            const welcome = document.getElementById('welcome-screen');
-            if (welcome) welcome.remove();
-            const inner = document.getElementById('chat-inner');
-            const wrap = document.createElement('div');
-            wrap.className = 'message ai';
-            wrap.id = 'typing-indicator';
-            wrap.innerHTML = `<div class="msg-avatar ai">A</div><div class="msg-bubble"><div class="typing-dots"><span></span><span></span><span></span></div></div>`;
-            inner.appendChild(wrap);
-            document.getElementById('chat-box').scrollTop = 99999;
-        }
-
-        function removeTyping() {
-            const t = document.getElementById('typing-indicator');
-            if (t) t.remove();
-        }
-
-        function showError(msg) {
-            const el = document.getElementById('error-msg');
-            el.textContent = msg;
-            el.style.display = 'block';
-            setTimeout(() => el.style.display = 'none', 5000);
-        }
-
-        // ── Send ──
-        async function sendMessage() {
-            if (isLoading) return;
-            const text = textarea.value.trim();
-            const attachedFile = selectedFileBlob;
-            const attachedMediaSrc = selectedFileBase64;
-            const currentVidState = isVideoSelected;
-
-            if (!text && !attachedFile) return;
-            if (!currentChatId) currentChatId = Date.now();
-            
-            appendMessage('user', text, attachedMediaSrc, currentVidState);
-            
-            const data = getData();
-            let chat = data.chats.find(c => c.id === currentChatId);
-            if (!chat) {
-                chat = { id: currentChatId, title: text ? text.substring(0, 32) : "Media Reference", messages: [], projectId: null };
-                data.chats.push(chat);
-            }
-            chat.messages.push({ role: 'user', text, image: attachedMediaSrc, isVideo: currentVidState });
-            saveData(data);
-            
-            textarea.value = '';
-            textarea.style.height = 'auto';
-            removeSelectedImage();
-            renderSidebar();
-            
-            isLoading = true;
-            document.getElementById('send-btn').disabled = true;
-            showTyping();
-
-            const formData = new FormData();
-            formData.append("message", text);
-            if (attachedFile) {
-                formData.append("file", attachedFile);
-            }
-
-            try {
-                const res = await fetch(BACKEND_URL + '/chat', {
-                    method: 'POST',
-                    body: formData,
-                    credentials: 'include'
-                });
-
-                if (!res.ok) {
-                    throw new Error(`Server returned status code: ${res.status}`);
-                }
-
-                removeTyping();
-
-                const reader = res.body.getReader();
-                const decoder = new TextDecoder();
-                
-                // Track dynamic node payload directly
-                const bubbleElement = appendMessage('assistant', '');
-                let accumulatedData = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    
-                    const chunk = decoder.decode(value, { stream: true });
-                    accumulatedData += chunk;
-                    
-                    // Render raw text updates inside bubble safely
-                    bubbleElement.textContent = accumulatedData;
-                    document.getElementById('chat-box').scrollTop = 99999;
-                }
-
-                // Render compiled rich format translations onto final chunk accumulation
-                if (accumulatedData.trim()) {
-                    const d = getData();
-                    const c = d.chats.find(x => x.id === currentChatId);
-                    if (c) { 
-                        c.messages.push({ role: 'assistant', text: accumulatedData }); 
-                        saveData(d); 
-                    }
-                    
-                    bubbleElement.innerHTML = accumulatedData
-                        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-                        .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
-                        .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
-                        .replace(/\n/g,'<br>');
-
-                    document.getElementById('current-chat-title').textContent = chat.title;
-                    renderSidebar();
-                } else {
-                    bubbleElement.textContent = '❌ Something went wrong processing the payload.';
-                }
-            } catch (err) {
-                removeTyping();
-                appendMessage('assistant', '❌ Connection error. Is the server running?');
-                showError('Connection error: ' + err.message);
-            } finally {
-                isLoading = false;
-                document.getElementById('send-btn').disabled = false;
-            }
-        }
+    // ── Messages ──
+    function appendMessage(role, text, mediaSrc = null, isVid = false) {
+        const welcome = document.getElementById('welcome-screen');
+        if (welcome) welcome.remove();
+        const inner = document.getElementById('chat-inner');
+        const wrap = document.createElement('div');
+        wrap.className = `message ${role === 'user' ? 'user' : 'ai'}`;
+        const avatarHTML = role === 'user'
+            ? `<div class="msg-avatar user-av"><i class="fas fa-user" style="font-size:10px;"></i></div>`
+            : `<div class="msg-avatar ai">A</div>`;
         
-        // ── Modals ──
-        function closeModal(id) {
-            document.getElementById(id).classList.remove('show');
+        let formatted = text
+            .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+            .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
+            .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
+            .replace(/\n/g,'<br>');
+
+        let mediaHTML = '';
+        if (mediaSrc) {
+            if (isVid) {
+                mediaHTML = `<video src="${mediaSrc}" class="msg-attached-vid" controls style="max-width:100%; max-height:250px; border-radius:8px; margin-top:8px; display:block;"></video>`;
+            } else {
+                mediaHTML = `<img src="${mediaSrc}" class="msg-attached-img" alt="Uploaded Attachment">`;
+            }
         }
 
-        document.getElementById('rename-input').addEventListener('keydown', e => {
-            if (e.key === 'Enter') confirmRename();
-            if (e.key === 'Escape') closeModal('rename-modal');
+        wrap.innerHTML = `${avatarHTML}<div class="msg-bubble">${formatted}${mediaHTML}</div>`;
+        inner.appendChild(wrap);
+        document.getElementById('chat-box').scrollTop = 99999;
+
+        return wrap.querySelector('.msg-bubble');
+    }
+
+    function showTyping() {
+        const welcome = document.getElementById('welcome-screen');
+        if (welcome) welcome.remove();
+        const inner = document.getElementById('chat-inner');
+        const wrap = document.createElement('div');
+        wrap.className = 'message ai';
+        wrap.id = 'typing-indicator';
+        wrap.innerHTML = `<div class="msg-avatar ai">A</div><div class="msg-bubble"><div class="typing-dots"><span></span><span></span><span></span></div></div>`;
+        inner.appendChild(wrap);
+        document.getElementById('chat-box').scrollTop = 99999;
+    }
+
+    function removeTyping() {
+        const t = document.getElementById('typing-indicator');
+        if (t) t.remove();
+    }
+
+    function showError(msg) {
+        const el = document.getElementById('error-msg');
+        el.textContent = msg;
+        el.style.display = 'block';
+        setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    // ── Send ──
+    async function sendMessage() {
+        if (isLoading) return;
+        const text = textarea.value.trim();
+        
+        if (!text && selectedFiles.length === 0) return;
+        if (!currentChatId) currentChatId = Date.now();
+        
+        // For simplicity with legacy single-view rendering, take the first file if available
+        const firstFile = selectedFiles[0];
+        const attachedMediaSrc = firstFile ? URL.createObjectURL(firstFile) : null;
+        const currentVidState = firstFile ? firstFile.type.startsWith('video/') : false;
+
+        appendMessage('user', text, attachedMediaSrc, currentVidState);
+        
+        const data = getData();
+        let chat = data.chats.find(c => c.id === currentChatId);
+        if (!chat) {
+            chat = { id: currentChatId, title: text ? text.substring(0, 32) : "Media Reference", messages: [], projectId: null };
+            data.chats.push(chat);
+        }
+        chat.messages.push({ role: 'user', text, image: attachedMediaSrc, isVideo: currentVidState });
+        saveData(data);
+        
+        textarea.value = '';
+        textarea.style.height = 'auto';
+        removeSelectedImage();
+        renderSidebar();
+        
+        isLoading = true;
+        document.getElementById('send-btn').disabled = true;
+        showTyping();
+
+        const formData = new FormData();
+        formData.append("message", text);
+        selectedFiles.forEach((file) => {
+            formData.append("files", file);
         });
 
-        document.querySelectorAll('.modal-overlay').forEach(overlay => {
-            overlay.addEventListener('click', e => {
-                if (e.target === overlay) overlay.classList.remove('show');
+        try {
+            const res = await fetch(BACKEND_URL + '/chat', {
+                method: 'POST',
+                body: formData,
+                credentials: 'include'
             });
+
+            if (!res.ok) {
+                throw new Error(`Server returned status code: ${res.status}`);
+            }
+
+            removeTyping();
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            
+            const bubbleElement = appendMessage('assistant', '');
+            let accumulatedData = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                const chunk = decoder.decode(value, { stream: true });
+                accumulatedData += chunk;
+                
+                bubbleElement.textContent = accumulatedData;
+                document.getElementById('chat-box').scrollTop = 99999;
+            }
+
+            if (accumulatedData.trim()) {
+                const d = getData();
+                const c = d.chats.find(x => x.id === currentChatId);
+                if (c) { 
+                    c.messages.push({ role: 'assistant', text: accumulatedData }); 
+                    saveData(d); 
+                }
+                
+                bubbleElement.innerHTML = accumulatedData
+                    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                    .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
+                    .replace(/`([^`]+)`/g,'<code style="background:rgba(79,142,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:#7eb3ff;font-family:DM Mono,monospace;">$1</code>')
+                    .replace(/\n/g,'<br>');
+
+                document.getElementById('current-chat-title').textContent = chat.title;
+                renderSidebar();
+            } else {
+                bubbleElement.textContent = '❌ Something went wrong processing the payload.';
+            }
+        } catch (err) {
+            removeTyping();
+            appendMessage('assistant', '❌ Connection error. Is the server running?');
+            showError('Connection error: ' + err.message);
+        } finally {
+            isLoading = false;
+            document.getElementById('send-btn').disabled = false;
+        }
+    }
+    
+    // ── Modals ──
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('show');
+    }
+
+    document.getElementById('rename-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') confirmRename();
+        if (e.key === 'Escape') closeModal('rename-modal');
+    });
+
+    document.querySelectorAll('.modal-overlay').forEach(overlay => {
+        overlay.addEventListener('click', e => {
+            if (e.target === overlay) overlay.classList.remove('show');
         });
-    </script>
+    });
+</script>
 </body>
 </html>
