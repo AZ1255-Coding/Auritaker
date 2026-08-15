@@ -129,7 +129,8 @@ def chat():
     if not ai_client: return jsonify({"response": "Model error"}), 500
 
     raw_message = request.form.get("message", "")
-    uploaded_file_obj = request.files.get("file")
+    # Change from get("file") to getlist("files") to handle multiple attachments
+    uploaded_file_objs = request.files.getlist("files")
     
     memory = get_memory()
     user_input = raw_message
@@ -192,51 +193,60 @@ def chat():
     if context:
         user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
 
-    # 3. File upload logic with processing state check for videos
-    file_uri_to_store, mime_type_to_store = None, None
-    if uploaded_file_obj and uploaded_file_obj.filename:
-        temp_dir = os.path.join(os.getcwd(), "temp_uploads")
-        os.makedirs(temp_dir, exist_ok=True)
-        temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
-        
-        try:
-            uploaded_file_obj.save(temp_path)
-            file_size = os.path.getsize(temp_path)
-            print(f"Successfully saved file locally: {temp_path}, Size: {file_size} bytes")
-            
-            gemini_file = ai_client.files.upload(file=temp_path)
-            
-            if uploaded_file_obj.filename.lower().endswith(('.mp4', '.webm', '.mov', '.wmv', '.quicktime')):
-                print("Processing video file on Gemini servers...")
-                while gemini_file.state.name == "PROCESSING":
-                    time.sleep(2)
-                    gemini_file = ai_client.files.get(name=gemini_file.name)
-                if gemini_file.state.name == "FAILED":
-                    raise Exception("Video processing failed on Gemini server.")
+    # 3. Multiple file upload logic with processing state check for videos
+    uploaded_files_meta = []
+    temp_dir = os.path.join(os.getcwd(), "temp_uploads")
+    os.makedirs(temp_dir, exist_ok=True)
 
-            file_uri_to_store, mime_type_to_store = gemini_file.uri, gemini_file.mime_type
-            print(f"Successfully uploaded to Gemini API: {file_uri_to_store} ({mime_type_to_store})")
-        except Exception as e:
-            print(f"CRITICAL FILE UPLOAD ERROR: {repr(e)}")
-        finally:
-            if os.path.exists(temp_path): 
-                os.remove(temp_path)
+    for uploaded_file_obj in uploaded_file_objs:
+        if uploaded_file_obj and uploaded_file_obj.filename:
+            temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
+            try:
+                uploaded_file_obj.save(temp_path)
+                file_size = os.path.getsize(temp_path)
+                print(f"Successfully saved file locally: {temp_path}, Size: {file_size} bytes")
+                
+                gemini_file = ai_client.files.upload(file=temp_path)
+                
+                if uploaded_file_obj.filename.lower().endswith(('.mp4', '.webm', '.mov', '.wmv', '.quicktime')):
+                    print("Processing video file on Gemini servers...")
+                    while gemini_file.state.name == "PROCESSING":
+                        time.sleep(2)
+                        gemini_file = ai_client.files.get(name=gemini_file.name)
+                    if gemini_file.state.name == "FAILED":
+                        raise Exception("Video processing failed on Gemini server.")
+
+                uploaded_files_meta.append({
+                    "file_uri": gemini_file.uri,
+                    "mime_type": gemini_file.mime_type
+                })
+                print(f"Successfully uploaded to Gemini API: {gemini_file.uri} ({gemini_file.mime_type})")
+            except Exception as e:
+                print(f"CRITICAL FILE UPLOAD ERROR for {uploaded_file_obj.filename}: {repr(e)}")
+            finally:
+                if os.path.exists(temp_path): 
+                    os.remove(temp_path)
 
     memory["messages"].append({
         "role": "user", 
         "content": user_input, 
-        "file_uri": file_uri_to_store, 
-        "mime_type": mime_type_to_store
+        "files": uploaded_files_meta # Store list of files instead of single URI/mime
     })
     recent = memory["messages"][-10:]
     
-    # 4. Build contents list
+    # 4. Build contents list supporting multiple parts per message
     contents = []
     for msg in recent:
         parts = []
         if msg.get("content"):
             parts.append(types.Part.from_text(text=msg["content"]))
-        if msg.get("file_uri"):
+        
+        # Handle multiple files attached in history if stored as a list
+        if msg.get("files"):
+            for f_meta in msg["files"]:
+                parts.append(types.Part.from_uri(file_uri=f_meta["file_uri"], mime_type=f_meta["mime_type"]))
+        # Fallback for single file legacy format if any exist in session
+        elif msg.get("file_uri"):
             parts.append(types.Part.from_uri(file_uri=msg.get("file_uri"), mime_type=msg.get("mime_type")))
         
         if parts:
