@@ -286,7 +286,7 @@
         </div>
     </main>
 
-    <script>
+   <script>
     const BACKEND_URL = 'https://auritaker.onrender.com';
     let currentChatId = null;
     let isLoading = false;
@@ -340,36 +340,59 @@
         sendMessage();
     }
 
-    // ── Media State Processing ──
+    // ── Media State Processing (Multi-File Support) ──
     function imageSelected(input) {
         const files = Array.from(input.files);
         if (files.length === 0) return;
         
-        selectedFiles = files;
+        // Append new files instead of overwriting
+        selectedFiles.push(...files);
+        renderPreviews();
+        input.value = ''; // Reset input so selecting identical files works again
+    }
+
+    function renderPreviews() {
         const container = document.getElementById('preview-media-container');
         container.innerHTML = '';
         
-        selectedFiles.forEach((file) => {
+        if (selectedFiles.length === 0) {
+            document.getElementById('img-preview-box').style.display = 'none';
+            return;
+        }
+
+        selectedFiles.forEach((file, index) => {
             const reader = new FileReader();
-            reader.readAsDataURL(file);
             reader.onload = function(e) {
                 const isVid = file.type.startsWith('video/');
                 const thumbWrap = document.createElement('div');
-                thumbWrap.style.cssText = 'position:relative; display:inline-block; height:100%; margin-right:4px;';
+                thumbWrap.style.cssText = 'position:relative; display:inline-block; height:100%; margin-right:6px;';
                 
+                let mediaEl;
                 if (isVid) {
-                    const videoEl = document.createElement('video');
-                    videoEl.src = e.target.result;
-                    videoEl.style.cssText = 'height:100%; width:36px; object-fit:cover; border-radius:4px;';
-                    thumbWrap.appendChild(videoEl);
+                    mediaEl = document.createElement('video');
+                    mediaEl.src = e.target.result;
+                    mediaEl.style.cssText = 'height:100%; width:36px; object-fit:cover; border-radius:4px;';
+                    thumbWrap.appendChild(mediaEl);
                 } else {
-                    const imgEl = document.createElement('img');
-                    imgEl.src = e.target.result;
-                    imgEl.style.cssText = 'height:100%; width:36px; object-fit:cover; border-radius:4px;';
-                    thumbWrap.appendChild(imgEl);
+                    mediaEl = document.createElement('img');
+                    mediaEl.src = e.target.result;
+                    mediaEl.style.cssText = 'height:100%; width:36px; object-fit:cover; border-radius:4px;';
+                    thumbWrap.appendChild(mediaEl);
                 }
+
+                // Remove individual attachment button
+                const removeBtn = document.createElement('button');
+                removeBtn.innerHTML = '&times;';
+                removeBtn.style.cssText = 'position:absolute; top:-4px; right:-4px; background:rgba(0,0,0,0.8); color:white; border:none; border-radius:50%; width:16px; height:16px; font-size:10px; cursor:pointer; display:flex; align-items:center; justify-content:center;';
+                removeBtn.onclick = () => {
+                    selectedFiles.splice(index, 1);
+                    renderPreviews();
+                };
+                thumbWrap.appendChild(removeBtn);
+
                 container.appendChild(thumbWrap);
             };
+            reader.readAsDataURL(file);
         });
         
         document.getElementById('img-preview-box').style.display = 'flex';
@@ -655,13 +678,13 @@
         document.getElementById('current-chat-title').textContent = chat.title;
         const inner = document.getElementById('chat-inner');
         inner.innerHTML = '';
-        chat.messages.forEach(m => appendMessage(m.role, m.text, m.image, m.isVideo));
+        chat.messages.forEach(m => appendMessage(m.role, m.text, m.files));
         removeSelectedImage();
         renderSidebar();
     }
 
-    // ── Messages ──
-    function appendMessage(role, text, mediaSrc = null, isVid = false) {
+    // ── Messages (Multi-File Rendering Support) ──
+    function appendMessage(role, text, fileItems = []) {
         const welcome = document.getElementById('welcome-screen');
         if (welcome) welcome.remove();
         const inner = document.getElementById('chat-inner');
@@ -678,12 +701,16 @@
             .replace(/\n/g,'<br>');
 
         let mediaHTML = '';
-        if (mediaSrc) {
-            if (isVid) {
-                mediaHTML = `<video src="${mediaSrc}" class="msg-attached-vid" controls style="max-width:100%; max-height:250px; border-radius:8px; margin-top:8px; display:block;"></video>`;
-            } else {
-                mediaHTML = `<img src="${mediaSrc}" class="msg-attached-img" alt="Uploaded Attachment">`;
-            }
+        if (fileItems && fileItems.length > 0) {
+            mediaHTML += '<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">';
+            fileItems.forEach(item => {
+                if (item.isVideo) {
+                    mediaHTML += `<video src="${item.src}" controls style="max-width:200px; max-height:150px; border-radius:6px; display:block;"></video>`;
+                } else {
+                    mediaHTML += `<img src="${item.src}" alt="Attachment" style="max-width:200px; max-height:150px; object-fit:cover; border-radius:6px; display:block;">`;
+                }
+            });
+            mediaHTML += '</div>';
         }
 
         wrap.innerHTML = `${avatarHTML}<div class="msg-bubble">${formatted}${mediaHTML}</div>`;
@@ -725,12 +752,13 @@
         if (!text && selectedFiles.length === 0) return;
         if (!currentChatId) currentChatId = Date.now();
         
-        // For simplicity with legacy single-view rendering, take the first file if available
-        const firstFile = selectedFiles[0];
-        const attachedMediaSrc = firstFile ? URL.createObjectURL(firstFile) : null;
-        const currentVidState = firstFile ? firstFile.type.startsWith('video/') : false;
+        // Build array of file objects for UI/LocalStorage rendering
+        const messageFiles = selectedFiles.map(file => ({
+            src: URL.createObjectURL(file),
+            isVideo: file.type.startsWith('video/')
+        }));
 
-        appendMessage('user', text, attachedMediaSrc, currentVidState);
+        appendMessage('user', text, messageFiles);
         
         const data = getData();
         let chat = data.chats.find(c => c.id === currentChatId);
@@ -738,9 +766,16 @@
             chat = { id: currentChatId, title: text ? text.substring(0, 32) : "Media Reference", messages: [], projectId: null };
             data.chats.push(chat);
         }
-        chat.messages.push({ role: 'user', text, image: attachedMediaSrc, isVideo: currentVidState });
+        chat.messages.push({ role: 'user', text, files: messageFiles });
         saveData(data);
         
+        // Prepare FormData containing ALL files for backend dispatch
+        const formData = new FormData();
+        formData.append("message", text);
+        selectedFiles.forEach((file) => {
+            formData.append("files", file);
+        });
+
         textarea.value = '';
         textarea.style.height = 'auto';
         removeSelectedImage();
@@ -749,12 +784,6 @@
         isLoading = true;
         document.getElementById('send-btn').disabled = true;
         showTyping();
-
-        const formData = new FormData();
-        formData.append("message", text);
-        selectedFiles.forEach((file) => {
-            formData.append("files", file);
-        });
 
         try {
             const res = await fetch(BACKEND_URL + '/chat', {
@@ -790,7 +819,7 @@
                 const d = getData();
                 const c = d.chats.find(x => x.id === currentChatId);
                 if (c) { 
-                    c.messages.push({ role: 'assistant', text: accumulatedData }); 
+                    c.messages.push({ role: 'assistant', text: accumulatedData, files: [] }); 
                     saveData(d); 
                 }
                 
