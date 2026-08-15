@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, session, redirect, send_from_directory, Response, copy_current_request_context
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_from_directory, Response, copy_current_request_context
 from flask_cors import CORS
 from flask_session import Session
 from tavily import TavilyClient
@@ -25,7 +25,7 @@ MAX_MEMORY = 20
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
-MODEL = "gemini-3.6-flash"
+MODEL = "gemini-2.5-flash"  # Updated to standard model name
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 SYSTEM_ROLE = """You are Auritaker AI, a multimodal sports assistant. RULES: Prioritize context. Never fabricate facts. If unverified, say 'Not available in sources.' and provide reasoning. Be concise. NEVER output raw tool JSON like 'dalle.text2im' or function calling syntax; fulfill generation text directly."""
@@ -47,6 +47,30 @@ def save_memory(mem):
 
 @app.route("/")
 def index():
+    return render_template("index.html")
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        # Add your login authentication logic here (e.g., check database)
+        data = request.form or request.json or {}
+        username = data.get("username")
+        # Example session assignment upon successful login:
+        # session["user"] = username
+        return jsonify({"status": "success", "message": "Logged in successfully"})
+    
+    # If you have a login.html template, use render_template("login.html")
+    # Otherwise, you can return a simple message or render index.html for SPA frontend routing
+    return render_template("index.html")
+
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    if request.method == "POST":
+        # Add your user registration logic here (e.g., hash password, save to database)
+        data = request.form or request.json or {}
+        username = data.get("username")
+        return jsonify({"status": "success", "message": "Account created successfully"})
+    
     return render_template("index.html")
 
 @app.route("/api/chat", methods=["POST"])
@@ -88,21 +112,19 @@ def chat():
         if parts:
             contents.append(types.Content(role="model" if msg["role"] == "assistant" else "user", parts=parts))
 
-    # 5. Stream the response via Chat Session (AFC-compatible pattern)
+    # Stream the response via Chat Session
     @copy_current_request_context
     def generate_stream():
         full_response_text = ""
         try:
             config_kwargs = {"system_instruction": memory["system"]}
 
-            # Initialize chat session using historical contents up to the last message
             chat = ai_client.chats.create(
                 model=MODEL,
                 history=contents[:-1] if len(contents) > 1 else [],
                 config=types.GenerateContentConfig(**config_kwargs)
             )
             
-            # Send latest message payload through chat stream
             latest_message = contents[-1] if contents else user_message
             response_stream = chat.send_message_stream(latest_message)
 
@@ -111,7 +133,6 @@ def chat():
                     full_response_text += chunk.text
                     yield chunk.text
                     
-            # Save final model response to memory
             if full_response_text:
                 memory["messages"].append({"role": "assistant", "content": full_response_text})
                 save_memory(memory)
