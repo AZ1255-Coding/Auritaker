@@ -28,242 +28,84 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 MODEL = "gemini-3.6-flash"
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-SYSTEM_ROLE = """You are Auritaker AI, a multimodal sports assistant. RULES: Prioritize context. Never fabricate facts. If unverified, say 'Not available in sources.' and provide reasoning. Be concise. NEVER output raw tool JSON like 'dalle.text2im' or function calling syntax; fulfill generation tasks directly through text or native media streams."""
+SYSTEM_ROLE = """You are Auritaker AI, a multimodal sports assistant. RULES: Prioritize context. Never fabricate facts. If unverified, say 'Not available in sources.' and provide reasoning. Be concise. NEVER output raw tool JSON like 'dalle.text2im' or function calling syntax; fulfill generation text directly."""
 
-BAD_DOMAINS = ["quora.com", "reddit.com", "medium.com"]
-
-# ---------------- TAVILY & SEARCH ---------------- #
-
-tavily = None
-if TAVILY_API_KEY:
-    try:
-        tavily = TavilyClient(api_key=TAVILY_API_KEY)
-    except Exception as e:
-        print("Tavily init failed:", e)
-
-def should_search(text: str) -> bool:
-    patterns = [r"\blatest\b", r"\bnews\b", r"\btoday\b", r"\bwho is\b", r"\bwhat is\b", r"\bvs\b", r"\bscore\b", r"\bweather\b", r"\brecent\b", r"\bupdate\b"]
-    return any(re.search(p, text.lower()) for p in patterns)
-
-def web_search(query):
-    try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=5))
-        cleaned = []
-        for item in results:
-            url_link = item.get("url", "")
-            if not any(b in url_link for b in BAD_DOMAINS):
-                cleaned.append({"title": item.get("title"), "snippet": item.get("snippet") or item.get("body"), "url": url_link})
-        return {"query": query, "results": cleaned}
-    except Exception as e:
-        print("DuckDuckGo Search error:", e)
-        return None
-
-# ---------------- MEMORY & USER STORAGE ---------------- #
+# ---------------- HELPER FUNCTIONS ---------------- #
 
 def get_memory():
-    return session.get("memory", {"system": SYSTEM_ROLE, "messages": []})
+    if "memory" not in session:
+        session["memory"] = {
+            "system": SYSTEM_ROLE,
+            "messages": []
+        }
+    return session["memory"]
 
-def save_memory(memory):
-    session["memory"] = memory
-    session.modified = True
-
-USERS_FILE = "users.json"
-def load_users():
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, "r") as f: return json.load(f)
-    return {}
-
-def save_users(users):
-    with open(USERS_FILE, "w") as f: json.dump(users, f)
+def save_memory(mem):
+    session["memory"] = mem
 
 # ---------------- ROUTES ---------------- #
 
-@app.route('/favicon.ico')
-def favicon():
-    return send_from_directory('static', 'favicon.ico')
-
 @app.route("/")
-def home():
-    if "user" not in session: return redirect("/login")
+def index():
     return render_template("index.html")
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        u, p = request.form.get("username", ""), request.form.get("password", "")
-        users = load_users()
-        if users.get(u) == p:
-            session["user"] = u
-            session["memory"] = {"system": SYSTEM_ROLE, "messages": []}
-            return redirect("/")
-        return render_template("login.html", error="Invalid credentials")
-    return render_template("login.html")
-
-@app.route("/signup", methods=["GET", "POST"])
-def signup():
-    if request.method == "POST":
-        u, p = request.form.get("username", ""), request.form.get("password", "")
-        users = load_users()
-        if u in users: return render_template("signup.html", error="User exists")
-        users[u] = p
-        save_users(users)
-        session["user"] = u
-        session["memory"] = {"system": SYSTEM_ROLE, "messages": []}
-        return redirect("/")
-    return render_template("signup.html")
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect("/login")
-
-@app.route("/static/generated_images/<filename>")
-def serve_generated_image(filename):
-    return send_from_directory("static/generated_images", filename)
-
-# ---------------- CHAT ROUTE ---------------- #
-@app.route("/chat", methods=["POST"])
+@app.route("/api/chat", methods=["POST"])
 def chat():
-    if "user" not in session: return jsonify({"response": "Not logged in"}), 401
-    if not ai_client: return jsonify({"response": "Model error"}), 500
+    if not ai_client:
+        return jsonify({"error": "Gemini API client not initialized. Check API Key."}), 500
 
-    raw_message = request.form.get("message", "")
-    # Change from get("file") to getlist("files") to handle multiple attachments
-    uploaded_file_objs = request.files.getlist("files")
-    
+    data = request.json or {}
+    user_message = data.get("message", "").strip()
+    file_info = data.get("file_info") # {"file_uri": "...", "mime_type": "..."}
+
     memory = get_memory()
-    user_input = raw_message
     
-    # ---------------- DYNAMIC IMAGE GENERATION ROUTING (Pollinations.ai) ---------------- #
-    is_image_command = user_input.strip().startswith("/imagine")
-    if is_image_command:
-        image_prompt = user_input.strip()[8:].strip()
-        print(f"Triggering Pollinations image generation for prompt: {image_prompt}")
-        
-        try:
-            encoded_prompt = urllib.parse.quote(image_prompt)
-            pollinations_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
-            
-            headers = {"User-Agent": "Mozilla/5.0"}
-            img_response = requests.get(pollinations_url, headers=headers, timeout=60)
-            
-            content_type = img_response.headers.get("content-type", "")
-            if img_response.status_code == 200 and "image" in content_type:
-                img_bytes = img_response.content
-                img_filename = f"gen_{session['user']}_{int(time.time())}.jpg"
-                img_path = os.path.join("static/generated_images", img_filename)
-                os.makedirs("static/generated_images", exist_ok=True)
-                
-                with open(img_path, "wb") as img_file:
-                    img_file.write(img_bytes)
-                
-                img_html = f'<br><img src="/static/generated_images/{img_filename}" alt="Generated Image" style="max-width:100%; border-radius:8px; margin-top:10px;"><br>'
-                
-                memory["messages"].append({"role": "user", "content": user_input})
-                memory["messages"].append({"role": "assistant", "content": img_html})
-                save_memory(memory)
-
-                @copy_current_request_context
-                def send_image_response():
-                    return Response(img_html, mimetype='text/html')
-                return send_image_response()
-            else:
-                raise Exception(f"Pollinations did not return an image (Status: {img_response.status_code}, Content-Type: {content_type})")
-                
-        except Exception as e:
-            print(f"Image generation error: {repr(e)}")
-            @copy_current_request_context
-            def send_error_response():
-                return Response(f"<br><span style='color:red;'>[Image generation failed: {repr(e)}]</span>", mimetype='text/html')
-            return send_error_response()
-
-    # ---------------- STANDARD CHAT LOGIC ---------------- #
-
-    # 1. Search happens ONCE here
-    context = None
-    try:
-        if user_input.strip() and should_search(user_input):
-            context = web_search(user_input)
-    except Exception as e:
-        print(f"Web search skipped due to error: {e}")
-        context = None 
-
-    # 2. Add the context to the input
-    if context:
-        user_input += f"\n\nReal-time web context:\n{json.dumps(context, indent=2)}"
-
-    # 3. Multiple file upload logic with processing state check for videos
-    uploaded_files_meta = []
-    temp_dir = os.path.join(os.getcwd(), "temp_uploads")
-    os.makedirs(temp_dir, exist_ok=True)
-
-    for uploaded_file_obj in uploaded_file_objs:
-        if uploaded_file_obj and uploaded_file_obj.filename:
-            temp_path = os.path.join(temp_dir, uploaded_file_obj.filename)
-            try:
-                uploaded_file_obj.save(temp_path)
-                file_size = os.path.getsize(temp_path)
-                print(f"Successfully saved file locally: {temp_path}, Size: {file_size} bytes")
-                
-                gemini_file = ai_client.files.upload(file=temp_path)
-                
-                if uploaded_file_obj.filename.lower().endswith(('.mp4', '.webm', '.mov', '.wmv', '.quicktime')):
-                    print("Processing video file on Gemini servers...")
-                    while gemini_file.state.name == "PROCESSING":
-                        time.sleep(2)
-                        gemini_file = ai_client.files.get(name=gemini_file.name)
-                    if gemini_file.state.name == "FAILED":
-                        raise Exception("Video processing failed on Gemini server.")
-
-                uploaded_files_meta.append({
-                    "file_uri": gemini_file.uri,
-                    "mime_type": gemini_file.mime_type
-                })
-                print(f"Successfully uploaded to Gemini API: {gemini_file.uri} ({gemini_file.mime_type})")
-            except Exception as e:
-                print(f"CRITICAL FILE UPLOAD ERROR for {uploaded_file_obj.filename}: {repr(e)}")
-            finally:
-                if os.path.exists(temp_path): 
-                    os.remove(temp_path)
-
-    memory["messages"].append({
-        "role": "user", 
-        "content": user_input, 
-        "files": uploaded_files_meta # Store list of files instead of single URI/mime
-    })
-    recent = memory["messages"][-10:]
+    # Append user message to memory
+    user_entry = {"role": "user", "content": user_message}
+    if file_info:
+        user_entry["file_info"] = file_info
     
-    # 4. Build contents list supporting multiple parts per message
+    memory["messages"].append(user_entry)
+    
+    # Trim memory to MAX_MEMORY
+    if len(memory["messages"]) > MAX_MEMORY:
+        memory["messages"] = memory["messages"][-MAX_MEMORY:]
+    save_memory(memory)
+
+    # Build contents for Gemini Chat history conversion
     contents = []
-    for msg in recent:
+    for msg in memory["messages"]:
         parts = []
         if msg.get("content"):
-            parts.append(types.Part.from_text(text=msg["content"]))
-        
-        # Handle multiple files attached in history if stored as a list
-        if msg.get("files"):
-            for f_meta in msg["files"]:
-                parts.append(types.Part.from_uri(file_uri=f_meta["file_uri"], mime_type=f_meta["mime_type"]))
-        # Fallback for single file legacy format if any exist in session
+            parts.append(msg["content"])
+            
+        f_meta = msg.get("file_info")
+        if f_meta and f_meta.get("file_uri"):
+            parts.append(types.Part.from_uri(file_uri=f_meta["file_uri"], mime_type=f_meta["mime_type"]))
         elif msg.get("file_uri"):
             parts.append(types.Part.from_uri(file_uri=msg.get("file_uri"), mime_type=msg.get("mime_type")))
         
         if parts:
             contents.append(types.Content(role="model" if msg["role"] == "assistant" else "user", parts=parts))
 
-    # 5. Stream the response
+    # 5. Stream the response via Chat Session (AFC-compatible pattern)
     @copy_current_request_context
     def generate_stream():
         full_response_text = ""
         try:
             config_kwargs = {"system_instruction": memory["system"]}
 
-            response_stream = ai_client.models.generate_content_stream(
-                model=MODEL, 
-                contents=contents, 
+            # Initialize chat session using historical contents up to the last message
+            chat = ai_client.chats.create(
+                model=MODEL,
+                history=contents[:-1] if len(contents) > 1 else [],
                 config=types.GenerateContentConfig(**config_kwargs)
             )
+            
+            # Send latest message payload through chat stream
+            latest_message = contents[-1] if contents else user_message
+            response_stream = chat.send_message_stream(latest_message)
+
             for chunk in response_stream:
                 if chunk.text:
                     full_response_text += chunk.text
@@ -280,4 +122,4 @@ def chat():
     return Response(generate_stream(), mimetype='text/markdown')
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 1010)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
