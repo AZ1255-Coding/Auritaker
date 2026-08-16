@@ -49,22 +49,6 @@ def save_memory(mem):
 def index():
     return render_template("index.html")
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        data = request.form or request.json or {}
-        username = data.get("username")
-        return jsonify({"status": "success", "message": "Logged in successfully"})
-    return render_template("login.html")
-
-@app.route("/signup", methods=["GET", "POST"])
-def signup():
-    if request.method == "POST":
-        data = request.form or request.json or {}
-        username = data.get("username")
-        return jsonify({"status": "success", "message": "Account created successfully"})
-    return render_template("signup.html")
-
 @app.route("/api/chat", methods=["POST"])
 def chat():
     if not ai_client:
@@ -129,6 +113,15 @@ def chat():
             yield f"\n[Chat processing error: {repr(e)}]"
     
     return Response(generate_stream(), mimetype='text/markdown')
+
+# ---------------- CATCH-ALL ROUTE (AT THE VERY END) ---------------- #
+@app.route("/<path:path>")
+def catch_all(path):
+    # Let missing API calls return a proper 404 JSON instead of HTML
+    if path.startswith("api/"):
+        return jsonify({"error": "API endpoint not found"}), 404
+    # Fallback all other frontend routes (like /login, /signup) to index.html
+    return render_template("index.html")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
