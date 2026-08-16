@@ -25,7 +25,7 @@ MAX_MEMORY = 20
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
-MODEL = "gemini-2.5-flash"  # Updated to standard model name
+MODEL = "gemini-2.5-flash"
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 SYSTEM_ROLE = """You are Auritaker AI, a multimodal sports assistant. RULES: Prioritize context. Never fabricate facts. If unverified, say 'Not available in sources.' and provide reasoning. Be concise. NEVER output raw tool JSON like 'dalle.text2im' or function calling syntax; fulfill generation text directly."""
@@ -50,26 +50,20 @@ def index():
     return render_template("index.html")
 
 @app.route("/login", methods=["GET", "POST"])
-render_template("login.html")
 def login():
     if request.method == "POST":
-        # Add your login authentication logic here (e.g., check database)
         data = request.form or request.json or {}
         username = data.get("username")
-        # Example session assignment upon successful login:
-        # session["user"] = username
         return jsonify({"status": "success", "message": "Logged in successfully"})
+    return render_template("login.html")
 
 @app.route("/signup", methods=["GET", "POST"])
-render_template("signup.html")
 def signup():
     if request.method == "POST":
-        # Add your user registration logic here (e.g., hash password, save to database)
         data = request.form or request.json or {}
         username = data.get("username")
         return jsonify({"status": "success", "message": "Account created successfully"})
-    
-    return render_template("index.html")
+    return render_template("signup.html")
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
