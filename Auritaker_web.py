@@ -50,6 +50,7 @@ def index():
     return render_template("index.html")
 
 @app.route("/login", methods=["GET", "POST"])
+render_template(login.html)
 def login():
     if request.method == "POST":
         # Add your login authentication logic here (e.g., check database)
@@ -64,6 +65,7 @@ def login():
     return render_template("index.html")
 
 @app.route("/signup", methods=["GET", "POST"])
+render_template(signup.html)
 def signup():
     if request.method == "POST":
         # Add your user registration logic here (e.g., hash password, save to database)
