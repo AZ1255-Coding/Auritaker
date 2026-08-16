@@ -50,7 +50,7 @@ def index():
     return render_template("index.html")
 
 @app.route("/login", methods=["GET", "POST"])
-render_template(login.html)
+render_template("login.html")
 def login():
     if request.method == "POST":
         # Add your login authentication logic here (e.g., check database)
@@ -59,13 +59,9 @@ def login():
         # Example session assignment upon successful login:
         # session["user"] = username
         return jsonify({"status": "success", "message": "Logged in successfully"})
-    
-    # If you have a login.html template, use render_template("login.html")
-    # Otherwise, you can return a simple message or render index.html for SPA frontend routing
-    return render_template("index.html")
 
 @app.route("/signup", methods=["GET", "POST"])
-render_template(signup.html)
+render_template("signup.html")
 def signup():
     if request.method == "POST":
         # Add your user registration logic here (e.g., hash password, save to database)
