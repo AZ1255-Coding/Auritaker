@@ -72,23 +72,20 @@ def chat():
 
     data = request.json or {}
     user_message = data.get("message", "").strip()
-    file_info = data.get("file_info") # {"file_uri": "...", "mime_type": "..."}
+    file_info = data.get("file_info")
 
     memory = get_memory()
     
-    # Append user message to memory
     user_entry = {"role": "user", "content": user_message}
     if file_info:
         user_entry["file_info"] = file_info
     
     memory["messages"].append(user_entry)
     
-    # Trim memory to MAX_MEMORY
     if len(memory["messages"]) > MAX_MEMORY:
         memory["messages"] = memory["messages"][-MAX_MEMORY:]
     save_memory(memory)
 
-    # Build contents for Gemini Chat history conversion
     contents = []
     for msg in memory["messages"]:
         parts = []
@@ -104,7 +101,6 @@ def chat():
         if parts:
             contents.append(types.Content(role="model" if msg["role"] == "assistant" else "user", parts=parts))
 
-    # Stream the response via Chat Session
     @copy_current_request_context
     def generate_stream():
         full_response_text = ""
